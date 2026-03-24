@@ -16,7 +16,10 @@
 
 ## Index
 
-### 🔗 Git & Version Control — `git/`
+---
+
+### Git & Version Control
+**`git/`**
 
 | File |
 |------|
@@ -46,9 +49,11 @@
 
 ---
 
-### 🎯 Algorithms & Data Structures — `algorithms/`
+### Algorithms & Data Structures
+**`algorithms/`**
 
 #### Complexity Analysis
+
 | File |
 |------|
 | [big-o-notation.md](algorithms/complexity/big-o-notation.md) |
@@ -56,6 +61,7 @@
 | [complexity-analysis.md](algorithms/complexity/complexity-analysis.md) |
 
 #### Data Structures
+
 | File |
 |------|
 | [array.md](algorithms/datastructures/array.md) |
@@ -71,6 +77,7 @@
 | [trie.md](algorithms/datastructures/trie.md) |
 
 #### Problem-Solving Patterns
+
 | File |
 |------|
 | [backtracking.md](algorithms/patterns/backtracking.md) |
@@ -83,6 +90,7 @@
 | [two-pointers.md](algorithms/patterns/two-pointers.md) |
 
 #### Search Algorithms
+
 | File |
 |------|
 | [a-star.md](algorithms/searching/a-star.md) |
@@ -92,6 +100,7 @@
 | [dijkstra.md](algorithms/searching/dijkstra.md) |
 
 #### Sorting Algorithms
+
 | File |
 |------|
 | [bubble-insertion-selection.md](algorithms/sorting-algorithms/bubble-insertion-selection.md) |
@@ -102,6 +111,7 @@
 | [sorting-in-practice.md](algorithms/sorting-algorithms/sorting-in-practice.md) |
 
 #### Problem-Solving Frameworks
+
 | File |
 |------|
 | [common-patterns-map.md](algorithms/problem-solving-frameworks/common-patterns-map.md) |
@@ -110,7 +120,8 @@
 
 ---
 
-### 💾 Databases — `databases/`
+### Databases
+**`databases/`**
 
 #### Database Design
 | File |
@@ -188,7 +199,8 @@
 | [migrations-strategy.md](databases/production/migrations-strategy.md) |
 
 ---
-
+System Design
+**`system-design/`**
 ### 🏗️ System Design — `system-design/`
 
 #### Foundations
@@ -271,7 +283,8 @@
 | [secret-management.md](system-design/security-patterns/secret-management.md) |
 
 ---
-
+C# & .NET Backend
+**`dotnet/`**
 ### 🔷 C# & .NET Backend — `dotnet/`
 
 #### C# Fundamentals
@@ -440,13 +453,15 @@
 | [testing-testcontainers.md](dotnet/testing/testing-testcontainers.md) |
 
 ---
-
+DevOps
+**`devops/`**
 ### 🚀 DevOps — `devops/`
 
 *(Content coming soon)*
 
 ---
-
+AI Engineering
+**`ai-engineering/`**
 ### 🤖 AI Engineering — `ai-engineering/`
 
 *(Content coming soon)*
