@@ -16,107 +16,166 @@ Merge sort is the clearest example of divide and conquer. Split the array in hal
 ## The Code
 
 **Standard top-down merge sort**
-```python
-def merge_sort(items: list) -> list:
-    if len(items) <= 1:
-        return items
+```csharp
+public static List<int> MergeSort(List<int> items)
+{
+    if (items.Count <= 1)
+        return items;
 
-    mid = len(items) // 2
-    left  = merge_sort(items[:mid])
-    right = merge_sort(items[mid:])
-    return merge(left, right)
+    int mid = items.Count / 2;
+    var left = MergeSort(items.Take(mid).ToList());
+    var right = MergeSort(items.Skip(mid).ToList());
+    return Merge(left, right);
+}
 
-def merge(left: list, right: list) -> list:
-    result = []
-    i = j = 0
-    while i < len(left) and j < len(right):
-        if left[i] <= right[j]:   # <= preserves stability
-            result.append(left[i])
-            i += 1
-        else:
-            result.append(right[j])
-            j += 1
-    result.extend(left[i:])       # append remaining elements
-    result.extend(right[j:])
-    return result
+public static List<int> Merge(List<int> left, List<int> right)
+{
+    var result = new List<int>();
+    int i = 0, j = 0;
+    while (i < left.Count && j < right.Count)
+    {
+        if (left[i] <= right[j])   // <= preserves stability
+        {
+            result.Add(left[i]);
+            i++;
+        }
+        else
+        {
+            result.Add(right[j]);
+            j++;
+        }
+    }
+    result.AddRange(left.Skip(i));       // append remaining elements
+    result.AddRange(right.Skip(j));
+    return result;
+}
 ```
 
 **In-place merge sort (avoids extra allocation)**
-```python
-def merge_sort_inplace(items: list, left: int, right: int) -> None:
-    if left >= right:
-        return
-    mid = (left + right) // 2
-    merge_sort_inplace(items, left,    mid)
-    merge_sort_inplace(items, mid + 1, right)
-    merge_inplace(items, left, mid, right)
+```csharp
+public static void MergeSortInPlace(List<int> items, int left, int right)
+{
+    if (left >= right)
+        return;
+    int mid = (left + right) / 2;
+    MergeSortInPlace(items, left, mid);
+    MergeSortInPlace(items, mid + 1, right);
+    MergeInPlace(items, left, mid, right);
+}
 
-def merge_inplace(items: list, left: int, mid: int, right: int) -> None:
-    temp = items[left:right + 1]
-    i, j, k = 0, mid - left + 1, left
-    while i <= mid - left and j <= right - left:
-        if temp[i] <= temp[j]:
-            items[k] = temp[i]; i += 1
-        else:
-            items[k] = temp[j]; j += 1
-        k += 1
-    while i <= mid - left:
-        items[k] = temp[i]; i += 1; k += 1
-    while j <= right - left:
-        items[k] = temp[j]; j += 1; k += 1
+public static void MergeInPlace(List<int> items, int left, int mid, int right)
+{
+    var temp = items.GetRange(left, right - left + 1);
+    int i = 0, j = mid - left + 1, k = left;
+    while (i <= mid - left && j <= right - left)
+    {
+        if (temp[i] <= temp[j])
+        {
+            items[k] = temp[i]; i++;
+        }
+        else
+        {
+            items[k] = temp[j]; j++;
+        }
+        k++;
+    }
+    while (i <= mid - left)
+    {
+        items[k] = temp[i]; i++; k++;
+    }
+    while (j <= right - left)
+    {
+        items[k] = temp[j]; j++; k++;
+    }
+}
 ```
 
 **Merge sort on a linked list — O(n log n), O(log n) space**
-```python
-class ListNode:
-    def __init__(self, val=0, next=None):
-        self.val = val
-        self.next = next
+```csharp
+public class ListNode
+{
+    public int val;
+    public ListNode next;
+    public ListNode(int val = 0, ListNode next = null)
+    {
+        this.val = val;
+        this.next = next;
+    }
+}
 
-def sort_list(head: ListNode) -> ListNode:
-    if not head or not head.next:
-        return head
-    slow, fast = head, head.next
-    while fast and fast.next:         # find midpoint
-        slow = slow.next
-        fast = fast.next.next
-    mid = slow.next
-    slow.next = None                  # split into two lists
-    left  = sort_list(head)
-    right = sort_list(mid)
-    return merge_lists(left, right)
+public static ListNode SortList(ListNode head)
+{
+    if (head == null || head.next == null)
+        return head;
+    
+    ListNode slow = head, fast = head.next;
+    while (fast != null && fast.next != null)         // find midpoint
+    {
+        slow = slow.next;
+        fast = fast.next.next;
+    }
+    ListNode mid = slow.next;
+    slow.next = null;                  // split into two lists
+    
+    ListNode left = SortList(head);
+    ListNode right = SortList(mid);
+    return MergeLists(left, right);
+}
 
-def merge_lists(l1: ListNode, l2: ListNode) -> ListNode:
-    dummy = ListNode(0)
-    curr = dummy
-    while l1 and l2:
-        if l1.val <= l2.val:
-            curr.next = l1; l1 = l1.next
-        else:
-            curr.next = l2; l2 = l2.next
-        curr = curr.next
-    curr.next = l1 or l2
-    return dummy.next
+public static ListNode MergeLists(ListNode l1, ListNode l2)
+{
+    var dummy = new ListNode(0);
+    ListNode curr = dummy;
+    while (l1 != null && l2 != null)
+    {
+        if (l1.val <= l2.val)
+        {
+            curr.next = l1; l1 = l1.next;
+        }
+        else
+        {
+            curr.next = l2; l2 = l2.next;
+        }
+        curr = curr.next;
+    }
+    curr.next = l1 ?? l2;
+    return dummy.next;
+}
 ```
 
 **Count inversions using merge sort — O(n log n)**
-```python
-def count_inversions(items: list) -> int:
-    if len(items) <= 1:
-        return 0
-    mid = len(items) // 2
-    left, right = items[:mid], items[mid:]
-    count = count_inversions(left) + count_inversions(right)
-    i = j = k = 0
-    while i < len(left) and j < len(right):
-        if left[i] <= right[j]:
-            items[k] = left[i]; i += 1
-        else:
-            items[k] = right[j]; j += 1
-            count += len(left) - i    # all remaining left elements are > right[j]
-        k += 1
-    items[k:] = left[i:] or right[j:]
-    return count
+```csharp
+public static long CountInversions(List<int> items)
+{
+    if (items.Count <= 1)
+        return 0;
+    int mid = items.Count / 2;
+    var left = items.Take(mid).ToList();
+    var right = items.Skip(mid).ToList();
+    long count = CountInversions(left) + CountInversions(right);
+    
+    int i = 0, j = 0, k = 0;
+    while (i < left.Count && j < right.Count)
+    {
+        if (left[i] <= right[j])
+        {
+            items[k] = left[i]; i++;
+        }
+        else
+        {
+            items[k] = right[j]; j++;
+            count += left.Count - i;    // all remaining left elements are > right[j]
+        }
+        k++;
+    }
+    
+    while (i < left.Count)
+        items[k++] = left[i++];
+    while (j < right.Count)
+        items[k++] = right[j++];
+    
+    return count;
+}
 ```
 
 ---

@@ -18,96 +18,133 @@ The key difference from dynamic programming: divide-and-conquer subproblems are 
 ## The Code
 
 **Master Theorem reference**
-```python
-# T(n) = aT(n/b) + f(n)
-#
-# Case 1: f(n) = O(n^(log_b(a) - ε)) → T(n) = O(n^log_b(a))
-#   Work is dominated by subproblems.
-#   Example: Binary search — T(n) = T(n/2) + O(1) → O(log n)
-#
-# Case 2: f(n) = O(n^log_b(a)) → T(n) = O(n^log_b(a) * log n)
-#   Work is balanced between subproblems and combining.
-#   Example: Merge sort — T(n) = 2T(n/2) + O(n) → O(n log n)
-#
-# Case 3: f(n) = O(n^(log_b(a) + ε)) → T(n) = O(f(n))
-#   Work is dominated by combining.
-#   Example: T(n) = T(n/2) + O(n) → O(n)
+```csharp
+// T(n) = aT(n/b) + f(n)
+//
+// Case 1: f(n) = O(n^(log_b(a) - ε)) → T(n) = O(n^log_b(a))
+//   Work is dominated by subproblems.
+//   Example: Binary search — T(n) = T(n/2) + O(1) → O(log n)
+//
+// Case 2: f(n) = O(n^log_b(a)) → T(n) = O(n^log_b(a) * log n)
+//   Work is balanced between subproblems and combining.
+//   Example: Merge sort — T(n) = 2T(n/2) + O(n) → O(n log n)
+//
+// Case 3: f(n) = O(n^(log_b(a) + ε)) → T(n) = O(f(n))
+//   Work is dominated by combining.
+//   Example: T(n) = T(n/2) + O(n) → O(n)
 ```
 
 **Merge sort — canonical divide and conquer**
-```python
-def merge_sort(items: list) -> list:
-    if len(items) <= 1:
-        return items
-    mid = len(items) // 2
-    left  = merge_sort(items[:mid])   # conquer left — T(n/2)
-    right = merge_sort(items[mid:])   # conquer right — T(n/2)
-    return merge(left, right)         # combine — O(n)
+```csharp
+public List<int> MergeSort(List<int> items)
+{
+    if (items.Count <= 1)
+        return items;
+    int mid = items.Count / 2;
+    var left = MergeSort(new List<int>(items.GetRange(0, mid)));  // conquer left — T(n/2)
+    var right = MergeSort(new List<int>(items.GetRange(mid, items.Count - mid)));  // conquer right — T(n/2)
+    return Merge(left, right);  // combine — O(n)
+}
 
-def merge(left, right):
-    result, i, j = [], 0, 0
-    while i < len(left) and j < len(right):
-        if left[i] <= right[j]:
-            result.append(left[i]); i += 1
-        else:
-            result.append(right[j]); j += 1
-    return result + left[i:] + right[j:]
+private List<int> Merge(List<int> left, List<int> right)
+{
+    var result = new List<int>();
+    int i = 0, j = 0;
+    while (i < left.Count && j < right.Count)
+    {
+        if (left[i] <= right[j])
+            result.Add(left[i++]);
+        else
+            result.Add(right[j++]);
+    }
+    result.AddRange(left.GetRange(i, left.Count - i));
+    result.AddRange(right.GetRange(j, right.Count - j));
+    return result;
+}
 ```
 
 **Maximum subarray — divide and conquer approach**
-```python
-def max_subarray(nums: list, lo: int, hi: int) -> int:
-    if lo == hi:
-        return nums[lo]
-    mid = (lo + hi) // 2
-    left_max  = max_subarray(nums, lo, mid)       # best in left half
-    right_max = max_subarray(nums, mid + 1, hi)   # best in right half
-    cross_max = max_crossing(nums, lo, mid, hi)   # best spanning the midpoint
-    return max(left_max, right_max, cross_max)
+```csharp
+public int MaxSubarray(int[] nums, int lo, int hi)
+{
+    if (lo == hi)
+        return nums[lo];
+    int mid = (lo + hi) / 2;
+    int leftMax = MaxSubarray(nums, lo, mid);         // best in left half
+    int rightMax = MaxSubarray(nums, mid + 1, hi);    // best in right half
+    int crossMax = MaxCrossing(nums, lo, mid, hi);    // best spanning the midpoint
+    return Math.Max(Math.Max(leftMax, rightMax), crossMax);
+}
 
-def max_crossing(nums, lo, mid, hi):
-    left_sum = right_sum = 0
-    best_left = best_right = float('-inf')
-    s = 0
-    for i in range(mid, lo - 1, -1):
-        s += nums[i]
-        best_left = max(best_left, s)
-    s = 0
-    for i in range(mid + 1, hi + 1):
-        s += nums[i]
-        best_right = max(best_right, s)
-    return best_left + best_right
+private int MaxCrossing(int[] nums, int lo, int mid, int hi)
+{
+    int leftSum = 0, rightSum = 0;
+    int bestLeft = int.MinValue, bestRight = int.MinValue;
+    int s = 0;
+    for (int i = mid; i >= lo; i--)
+    {
+        s += nums[i];
+        bestLeft = Math.Max(bestLeft, s);
+    }
+    s = 0;
+    for (int i = mid + 1; i <= hi; i++)
+    {
+        s += nums[i];
+        bestRight = Math.Max(bestRight, s);
+    }
+    return bestLeft + bestRight;
+}
 ```
 
 **Count inversions — divide and conquer piggyback on merge sort**
-```python
-def count_inversions(nums: list) -> int:
-    if len(nums) <= 1:
-        return 0
-    mid = len(nums) // 2
-    left, right = nums[:mid], nums[mid:]
-    count = count_inversions(left) + count_inversions(right)
-    i = j = k = 0
-    while i < len(left) and j < len(right):
-        if left[i] <= right[j]:
-            nums[k] = left[i]; i += 1
-        else:
-            nums[k] = right[j]; j += 1
-            count += len(left) - i    # all remaining left elements are inversions
-        k += 1
-    nums[k:] = left[i:] or right[j:]
-    return count
+```csharp
+public int CountInversions(int[] nums)
+{
+    return CountInversionsHelper(nums, 0, nums.Length - 1);
+}
+
+private int CountInversionsHelper(int[] nums, int left, int right)
+{
+    if (left >= right)
+        return 0;
+    int mid = (left + right) / 2;
+    int count = CountInversionsHelper(nums, left, mid) + CountInversionsHelper(nums, mid + 1, right);
+    var tempLeft = new int[mid - left + 1];
+    var tempRight = new int[right - mid];
+    Array.Copy(nums, left, tempLeft, 0, mid - left + 1);
+    Array.Copy(nums, mid + 1, tempRight, 0, right - mid);
+    int i = 0, j = 0, k = left;
+    while (i < tempLeft.Length && j < tempRight.Length)
+    {
+        if (tempLeft[i] <= tempRight[j])
+            nums[k++] = tempLeft[i++];
+        else
+        {
+            nums[k++] = tempRight[j++];
+            count += tempLeft.Length - i;  // all remaining left elements are inversions
+        }
+    }
+    while (i < tempLeft.Length)
+        nums[k++] = tempLeft[i++];
+    while (j < tempRight.Length)
+        nums[k++] = tempRight[j++];
+    return count;
+}
 ```
 
 **Fast power — O(log n) exponentiation**
-```python
-def fast_pow(base: float, exp: int) -> float:
-    if exp == 0:
-        return 1
-    if exp % 2 == 0:
-        half = fast_pow(base, exp // 2)
-        return half * half             # reuse — don't compute twice
-    return base * fast_pow(base, exp - 1)
+```csharp
+public double FastPow(double baseNum, int exp)
+{
+    if (exp == 0)
+        return 1;
+    if (exp % 2 == 0)
+    {
+        double half = FastPow(baseNum, exp / 2);
+        return half * half;  // reuse — don't compute twice
+    }
+    return baseNum * FastPow(baseNum, exp - 1);
+}
 ```
 
 ---

@@ -18,22 +18,37 @@ A data warehouse is a database designed for analytical queries rather than trans
 
 ## The Code
 
-### Writing raw events to a data lake (S3 via Python)
-```python
-import boto3, json
-from datetime import datetime
+### Writing raw events to a data lake (S3 via C#)
+```csharp
+using Amazon.S3;
+using System;
+using System.Text.Json;
+using System.Threading.Tasks;
 
-s3 = boto3.client("s3")
+public class DataLakeWriter
+{
+    private readonly AmazonS3Client _s3;
+    private const string Bucket = "my-data-lake";
 
-# Raw events land in a partitioned path — cheap and unstructured
-def write_event_to_lake(event: dict, bucket: str):
-    now = datetime.utcnow()
-    key = f"events/year={now.year}/month={now.month:02d}/day={now.day:02d}/{now.timestamp()}.json"
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=json.dumps(event).encode("utf-8")
-    )
+    public DataLakeWriter()
+    {
+        _s3 = new AmazonS3Client();
+    }
+
+    public async Task WriteEventToLakeAsync(Dictionary<string, object> evt)
+    {
+        var now = DateTime.UtcNow;
+        var key = $"events/year={now.Year}/month={now.Month:D2}/day={now.Day:D2}/{now.Ticks}.json";
+        
+        var content = JsonSerializer.Serialize(evt);
+        await _s3.PutObjectAsync(new Amazon.S3.Model.PutObjectRequest
+        {
+            BucketName = Bucket,
+            Key = key,
+            ContentBody = content
+        });
+    }
+}
 ```
 
 ### Querying the lake with Athena (schema-on-read)

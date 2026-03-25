@@ -18,110 +18,154 @@ Pruning is where backtracking separates itself from naive enumeration. Before ma
 ## The Code
 
 **Subsets — enumerate all 2^n subsets**
-```python
-def subsets(nums: list) -> list:
-    result, path = [], []
+```csharp
+public List<List<int>> Subsets(int[] nums)
+{
+    var result = new List<List<int>>();
+    var path = new List<int>();
 
-    def backtrack(start: int) -> None:
-        result.append(path[:])           # snapshot: every path is a valid subset
-        for i in range(start, len(nums)):
-            path.append(nums[i])
-            backtrack(i + 1)
-            path.pop()                   # undo
+    void Backtrack(int start)
+    {
+        result.Add(new List<int>(path));  // snapshot: every path is a valid subset
+        for (int i = start; i < nums.Length; i++)
+        {
+            path.Add(nums[i]);
+            Backtrack(i + 1);
+            path.RemoveAt(path.Count - 1);  // undo
+        }
+    }
 
-    backtrack(0)
-    return result
+    Backtrack(0);
+    return result;
+}
 ```
 
 **Permutations — enumerate all n! orderings**
-```python
-def permutations(nums: list) -> list:
-    result, path, used = [], [], [False] * len(nums)
+```csharp
+public List<List<int>> Permutations(int[] nums)
+{
+    var result = new List<List<int>>();
+    var path = new List<int>();
+    var used = new bool[nums.Length];
 
-    def backtrack() -> None:
-        if len(path) == len(nums):
-            result.append(path[:])
-            return
-        for i in range(len(nums)):
-            if used[i]:
-                continue
-            used[i] = True
-            path.append(nums[i])
-            backtrack()
-            path.pop()
-            used[i] = False              # undo
+    void Backtrack()
+    {
+        if (path.Count == nums.Length)
+        {
+            result.Add(new List<int>(path));
+            return;
+        }
+        for (int i = 0; i < nums.Length; i++)
+        {
+            if (used[i])
+                continue;
+            used[i] = true;
+            path.Add(nums[i]);
+            Backtrack();
+            path.RemoveAt(path.Count - 1);
+            used[i] = false;  // undo
+        }
+    }
 
-    backtrack()
-    return result
+    Backtrack();
+    return result;
+}
 ```
 
 **Combination sum — reuse allowed, find all combos summing to target**
-```python
-def combination_sum(candidates: list, target: int) -> list:
-    result, path = [], []
-    candidates.sort()
+```csharp
+public List<List<int>> CombinationSum(int[] candidates, int target)
+{
+    var result = new List<List<int>>();
+    var path = new List<int>();
+    Array.Sort(candidates);
 
-    def backtrack(start: int, remaining: int) -> None:
-        if remaining == 0:
-            result.append(path[:])
-            return
-        for i in range(start, len(candidates)):
-            if candidates[i] > remaining:
-                break                    # pruning: sorted, so all further are too large
-            path.append(candidates[i])
-            backtrack(i, remaining - candidates[i])   # i not i+1: reuse allowed
-            path.pop()
+    void Backtrack(int start, int remaining)
+    {
+        if (remaining == 0)
+        {
+            result.Add(new List<int>(path));
+            return;
+        }
+        for (int i = start; i < candidates.Length; i++)
+        {
+            if (candidates[i] > remaining)
+                break;  // pruning: sorted, so all further are too large
+            path.Add(candidates[i]);
+            Backtrack(i, remaining - candidates[i]);  // i not i+1: reuse allowed
+            path.RemoveAt(path.Count - 1);
+        }
+    }
 
-    backtrack(0, target)
-    return result
+    Backtrack(0, target);
+    return result;
+}
 ```
 
 **N-queens — constraint satisfaction with heavy pruning**
-```python
-def solve_n_queens(n: int) -> list:
-    result = []
-    cols = set()
-    diag1 = set()    # row - col
-    diag2 = set()    # row + col
+```csharp
+public List<List<int>> SolveNQueens(int n)
+{
+    var result = new List<List<int>>();
+    var cols = new HashSet<int>();
+    var diag1 = new HashSet<int>();  // row - col
+    var diag2 = new HashSet<int>();  // row + col
+    var path = new List<int>();
 
-    def backtrack(row: int, path: list) -> None:
-        if row == n:
-            result.append(path[:])
-            return
-        for col in range(n):
-            if col in cols or (row - col) in diag1 or (row + col) in diag2:
-                continue                # pruning: attacked square
-            cols.add(col)
-            diag1.add(row - col)
-            diag2.add(row + col)
-            path.append(col)
-            backtrack(row + 1, path)
-            path.pop()
-            cols.remove(col)
-            diag1.remove(row - col)
-            diag2.remove(row + col)
+    void Backtrack(int row)
+    {
+        if (row == n)
+        {
+            result.Add(new List<int>(path));
+            return;
+        }
+        for (int col = 0; col < n; col++)
+        {
+            if (cols.Contains(col) || diag1.Contains(row - col) || diag2.Contains(row + col))
+                continue;  // pruning: attacked square
+            cols.Add(col);
+            diag1.Add(row - col);
+            diag2.Add(row + col);
+            path.Add(col);
+            Backtrack(row + 1);
+            path.RemoveAt(path.Count - 1);
+            cols.Remove(col);
+            diag1.Remove(row - col);
+            diag2.Remove(row + col);
+        }
+    }
 
-    backtrack(0, [])
-    return result
+    Backtrack(0);
+    return result;
+}
 ```
 
 **Word search — backtracking on a 2D grid**
-```python
-def word_search(board: list, word: str) -> bool:
-    rows, cols = len(board), len(board[0])
+```csharp
+public bool WordSearch(char[][] board, string word)
+{
+    int rows = board.Length, cols = board[0].Length;
 
-    def backtrack(r: int, c: int, idx: int) -> bool:
-        if idx == len(word):
-            return True
-        if r < 0 or r >= rows or c < 0 or c >= cols or board[r][c] != word[idx]:
-            return False
-        temp, board[r][c] = board[r][c], '#'         # mark visited
-        found = any(backtrack(r+dr, c+dc, idx+1)
-                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)])
-        board[r][c] = temp                            # restore
-        return found
+    bool Backtrack(int r, int c, int idx)
+    {
+        if (idx == word.Length)
+            return true;
+        if (r < 0 || r >= rows || c < 0 || c >= cols || board[r][c] != word[idx])
+            return false;
+        char temp = board[r][c];
+        board[r][c] = '#';  // mark visited
+        bool found = Backtrack(r - 1, c, idx + 1) || Backtrack(r + 1, c, idx + 1) ||
+                     Backtrack(r, c - 1, idx + 1) || Backtrack(r, c + 1, idx + 1);
+        board[r][c] = temp;  // restore
+        return found;
+    }
 
-    return any(backtrack(r, c, 0) for r in range(rows) for c in range(cols))
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            if (Backtrack(r, c, 0))
+                return true;
+    return false;
+}
 ```
 
 ---

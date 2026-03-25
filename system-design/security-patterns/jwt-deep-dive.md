@@ -19,69 +19,146 @@ A JWT is three base64url-encoded JSON objects joined by dots: `header.payload.si
 ## The Code
 
 ### Decoding a JWT manually (understanding the structure)
-```python
-import base64, json
+```csharp
+using System;
+using System.Text;
+using System.Text.Json;
 
-token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MiIsImV4cCI6MTcxMTI2NzIwMH0.abc123"
+public class TokenParser
+{
+    public void DecodeJwtManually()
+    {
+        var token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MiIsImV4cCI6MTcxMTI2NzIwMH0.abc123";
 
-header_b64, payload_b64, signature = token.split(".")
+        var parts = token.Split(".");
+        var headerB64 = parts[0];
+        var payloadB64 = parts[1];
+        var signature = parts[2];
 
-# base64url decode (pad to multiple of 4)
-def decode_part(part):
-    padded = part + "=" * (4 - len(part) % 4)
-    return json.loads(base64.urlsafe_b64decode(padded))
+        var header = DecodePart(headerB64);
+        var payload = DecodePart(payloadB64);
 
-print(decode_part(header_b64))   # {"alg": "HS256", "typ": "JWT"}
-print(decode_part(payload_b64))  # {"sub": "42", "exp": 1711267200}
-# signature is binary — only valid if you have the secret to verify it
+        Console.WriteLine(header);    // {{\"alg\": \"HS256\", \"typ\": \"JWT\"}}
+        Console.WriteLine(payload);   // {{\"sub\": \"42\", \"exp\": 1711267200}}
+        // signature is binary — only valid if you have the secret to verify it
+    }
+
+    private string DecodePart(string part)
+    {
+        // Pad to multiple of 4
+        var padded = part + new string('=', (4 - part.Length % 4) % 4);
+        var decoded = Convert.FromBase64String(padded.Replace('-', '+').Replace('_', '/'));
+        return Encoding.UTF8.GetString(decoded);
+    }
+}
 ```
 
-### Issuing and validating with PyJWT
-```python
-import jwt
-from datetime import datetime, timedelta, timezone
+### Issuing and validating with System.IdentityModel.Tokens.Jwt
+```csharp
+using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Collections.Generic;
+using Microsoft.IdentityModel.Tokens;
 
-SECRET = "your-256-bit-secret"
+public class JwtHandler
+{
+    private const string Secret = "your-256-bit-secret-key-here-1234567890ab";
 
-# Issue
-token = jwt.encode(
+    public string IssueJwt()
     {
-        "sub": "42",
-        "iss": "my-api",
-        "aud": "my-client",
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-        "roles": ["editor"]  # custom claim
-    },
-    SECRET,
-    algorithm="HS256"
-)
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Secret));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-# Validate — raises DecodeError or ExpiredSignatureError on failure
-payload = jwt.decode(
-    token,
-    SECRET,
-    algorithms=["HS256"],
-    audience="my-client",  # must validate audience explicitly
-    issuer="my-api"
-)
-print(payload["sub"])  # "42"
+        var token = new JwtSecurityToken(
+            issuer: "my-api",
+            audience: "my-client",
+            claims: new List<System.Security.Claims.Claim>
+            {
+                new System.Security.Claims.Claim("sub", "42"),
+                new System.Security.Claims.Claim("roles", "editor")
+            },
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public System.Security.Claims.ClaimsPrincipal ValidateJwt(string token)
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Secret));
+        var handler = new JwtSecurityTokenHandler();
+
+        var principal = handler.ValidateToken(token, new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = key,
+            ValidateIssuer = true,
+            ValidIssuer = "my-api",
+            ValidateAudience = true,
+            ValidAudience = "my-client",
+            ValidateLifetime = true
+        }, out SecurityToken validatedToken);
+
+        return principal;
+    }
+}
 ```
 
 ### RS256 — asymmetric signing (production preferred)
-```python
-from cryptography.hazmat.primitives import serialization
+```csharp
+using System.Security.Cryptography;
+using System.IdentityModel.Tokens.Jwt;
+using System.Collections.Generic;
+using Microsoft.IdentityModel.Tokens;
+using System;
 
-# Sign with private key (auth server only has this)
-with open("private.pem", "rb") as f:
-    private_key = serialization.load_pem_private_key(f.read(), password=None)
+public class RsaJwtHandler
+{
+    public string IssueRsaJwt(RSAParameters privateKey)
+    {
+        var rsa = new RSACryptoServiceProvider();
+        rsa.ImportParameters(privateKey);
 
-token = jwt.encode({"sub": "42", "exp": ...}, private_key, algorithm="RS256")
+        var key = new RsaSecurityKey(rsa);
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.RsaSha256);
 
-# Verify with public key (any service can have this — no secret to share)
-with open("public.pem", "rb") as f:
-    public_key = serialization.load_pem_public_key(f.read())
+        var token = new JwtSecurityToken(
+            issuer: "my-api",
+            audience: "my-client",
+            claims: new List<System.Security.Claims.Claim>
+            {
+                new System.Security.Claims.Claim("sub", "42")
+            },
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
 
-payload = jwt.decode(token, public_key, algorithms=["RS256"], audience="...")
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public System.Security.Claims.ClaimsPrincipal ValidateRsaJwt(string token, RSAParameters publicKey)
+    {
+        var rsa = new RSACryptoServiceProvider();
+        rsa.ImportParameters(publicKey);
+
+        var key = new RsaSecurityKey(rsa);
+        var handler = new JwtSecurityTokenHandler();
+
+        var principal = handler.ValidateToken(token, new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = key,
+            ValidateIssuer = true,
+            ValidIssuer = "my-api",
+            ValidateAudience = true,
+            ValidAudience = "my-client",
+            ValidateLifetime = true
+        }, out SecurityToken validatedToken);
+
+        return principal;
+    }
+}
 ```
 
 ---

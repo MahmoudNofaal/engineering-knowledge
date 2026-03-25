@@ -16,71 +16,102 @@ Pick a pivot element. Rearrange the array so everything less than the pivot is t
 ## The Code
 
 **Standard quick sort with randomized pivot**
-```python
-import random
+```csharp
+public static void QuickSort(List<int> items, int lo, int hi)
+{
+    if (lo >= hi)
+        return;
+    int pivotIdx = Partition(items, lo, hi);
+    QuickSort(items, lo, pivotIdx - 1);
+    QuickSort(items, pivotIdx + 1, hi);
+}
 
-def quick_sort(items: list, lo: int, hi: int) -> None:
-    if lo >= hi:
-        return
-    pivot_idx = partition(items, lo, hi)
-    quick_sort(items, lo, pivot_idx - 1)
-    quick_sort(items, pivot_idx + 1, hi)
+public static int Partition(List<int> items, int lo, int hi)
+{
+    // swap a random element to the end as pivot
+    Random rand = new Random();
+    int randIdx = rand.Next(lo, hi + 1);
+    int temp = items[randIdx];
+    items[randIdx] = items[hi];
+    items[hi] = temp;
+    
+    int pivot = items[hi];
+    int i = lo - 1;                    // i tracks the last element ≤ pivot
+    for (int j = lo; j < hi; j++)
+    {
+        if (items[j] <= pivot)
+        {
+            i++;
+            temp = items[i];
+            items[i] = items[j];
+            items[j] = temp;
+        }
+    }
+    temp = items[i + 1];
+    items[i + 1] = items[hi];
+    items[hi] = temp;  // place pivot
+    return i + 1;
+}
 
-def partition(items: list, lo: int, hi: int) -> int:
-    # swap a random element to the end as pivot
-    rand_idx = random.randint(lo, hi)
-    items[rand_idx], items[hi] = items[hi], items[rand_idx]
-    pivot = items[hi]
-    i = lo - 1                    # i tracks the last element ≤ pivot
-    for j in range(lo, hi):
-        if items[j] <= pivot:
-            i += 1
-            items[i], items[j] = items[j], items[i]
-    items[i + 1], items[hi] = items[hi], items[i + 1]  # place pivot
-    return i + 1
-
-# Usage
-arr = [3, 6, 8, 10, 1, 2, 1]
-quick_sort(arr, 0, len(arr) - 1)
+// Usage
+var arr = new List<int> { 3, 6, 8, 10, 1, 2, 1 };
+QuickSort(arr, 0, arr.Count - 1);
 ```
 
 **Three-way partition (Dutch National Flag) — handles duplicates efficiently**
-```python
-def quick_sort_3way(items: list, lo: int, hi: int) -> None:
-    if lo >= hi:
-        return
-    pivot = items[lo]
-    lt, gt = lo, hi   # items[lo..lt-1] < pivot, items[gt+1..hi] > pivot
-    i = lo
-    while i <= gt:
-        if items[i] < pivot:
-            items[lt], items[i] = items[i], items[lt]
-            lt += 1; i += 1
-        elif items[i] > pivot:
-            items[gt], items[i] = items[i], items[gt]
-            gt -= 1            # don't increment i — new items[i] unchecked
-        else:
-            i += 1
-    quick_sort_3way(items, lo, lt - 1)
-    quick_sort_3way(items, gt + 1, hi)
+```csharp
+public static void QuickSort3Way(List<int> items, int lo, int hi)
+{
+    if (lo >= hi)
+        return;
+    int pivot = items[lo];
+    int lt = lo, gt = hi;   // items[lo..lt-1] < pivot, items[gt+1..hi] > pivot
+    int i = lo;
+    
+    while (i <= gt)
+    {
+        if (items[i] < pivot)
+        {
+            int temp = items[lt];
+            items[lt] = items[i];
+            items[i] = temp;
+            lt++; i++;
+        }
+        else if (items[i] > pivot)
+        {
+            int temp = items[gt];
+            items[gt] = items[i];
+            items[i] = temp;
+            gt--;            // don't increment i — new items[i] unchecked
+        }
+        else
+        {
+            i++;
+        }
+    }
+    QuickSort3Way(items, lo, lt - 1);
+    QuickSort3Way(items, gt + 1, hi);
+}
 ```
 
 **Quick select — kth smallest in O(n) average**
-```python
-def quick_select(items: list, lo: int, hi: int, k: int) -> int:
-    if lo == hi:
-        return items[lo]
-    pivot_idx = partition(items, lo, hi)
-    if k == pivot_idx:
-        return items[k]
-    elif k < pivot_idx:
-        return quick_select(items, lo, pivot_idx - 1, k)
-    else:
-        return quick_select(items, pivot_idx + 1, hi, k)
+```csharp
+public static int QuickSelect(List<int> items, int lo, int hi, int k)
+{
+    if (lo == hi)
+        return items[lo];
+    int pivotIdx = Partition(items, lo, hi);
+    if (k == pivotIdx)
+        return items[k];
+    else if (k < pivotIdx)
+        return QuickSelect(items, lo, pivotIdx - 1, k);
+    else
+        return QuickSelect(items, pivotIdx + 1, hi, k);
+}
 
-# Find kth smallest (0-indexed)
-arr = [3, 1, 4, 1, 5, 9, 2, 6]
-print(quick_select(arr, 0, len(arr) - 1, 3))  # 4th smallest
+// Find kth smallest (0-indexed)
+var arr = new List<int> { 3, 1, 4, 1, 5, 9, 2, 6 };
+Console.WriteLine(QuickSelect(arr, 0, arr.Count - 1, 3));  // 4th smallest
 ```
 
 ---

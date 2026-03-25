@@ -18,87 +18,140 @@ The "visited" check on pop is essential: because Python's `heapq` doesn't suppor
 ## The Code
 
 **Dijkstra — standard implementation with min-heap**
-```python
-import heapq
-from collections import defaultdict
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-def dijkstra(graph: dict, start: int) -> dict:
-    # graph[u] = [(weight, v), ...] — adjacency list with weights
-    dist = defaultdict(lambda: float('inf'))
-    dist[start] = 0
-    heap = [(0, start)]                   # (distance, node)
+public Dictionary<int, int> Dijkstra(Dictionary<int, List<(int, int)>> graph, int start)
+{
+    // graph[u] = [(weight, v), ...] — adjacency list with weights
+    var dist = new Dictionary<int, int>();
+    foreach (var node in graph.Keys)
+        dist[node] = int.MaxValue;
+    dist[start] = 0;
 
-    while heap:
-        d, node = heapq.heappop(heap)
-        if d > dist[node]:
-            continue                      # stale entry — skip it
+    var heap = new PriorityQueue<int, int>();
+    heap.Enqueue(start, 0);  // (node, distance)
 
-        for weight, neighbor in graph[node]:
-            new_dist = d + weight
-            if new_dist < dist[neighbor]:
-                dist[neighbor] = new_dist
-                heapq.heappush(heap, (new_dist, neighbor))
+    while (heap.Count > 0)
+    {
+        int node = heap.Dequeue();
+        int d = dist[node];
 
-    return dict(dist)
+        if (graph.ContainsKey(node))
+        {
+            foreach (var (weight, neighbor) in graph[node])
+            {
+                int newDist = d + weight;
+                if (newDist < dist[neighbor])
+                {
+                    dist[neighbor] = newDist;
+                    heap.Enqueue(neighbor, newDist);
+                }
+            }
+        }
+    }
+    return dist;
+}
 ```
 
 **Dijkstra with path reconstruction**
-```python
-import heapq
-from collections import defaultdict
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-def dijkstra_path(graph: dict, start: int, end: int) -> tuple:
-    dist = defaultdict(lambda: float('inf'))
-    dist[start] = 0
-    prev = {}
-    heap = [(0, start)]
+public (int, List<int>) DijkstraPath(Dictionary<int, List<(int, int)>> graph, int start, int end)
+{
+    var dist = new Dictionary<int, int>();
+    var prev = new Dictionary<int, int>();
+    foreach (var node in graph.Keys)
+        dist[node] = int.MaxValue;
+    dist[start] = 0;
 
-    while heap:
-        d, node = heapq.heappop(heap)
-        if d > dist[node]:
-            continue
-        if node == end:
-            break                         # early exit once destination settled
-        for weight, neighbor in graph[node]:
-            new_dist = d + weight
-            if new_dist < dist[neighbor]:
-                dist[neighbor] = new_dist
-                prev[neighbor] = node     # track predecessor
-                heapq.heappush(heap, (new_dist, neighbor))
+    var heap = new PriorityQueue<int, int>();
+    heap.Enqueue(start, 0);
 
-    # reconstruct path
-    path, node = [], end
-    while node in prev:
-        path.append(node)
-        node = prev[node]
-    path.append(start)
-    return dist[end], path[::-1]
+    while (heap.Count > 0)
+    {
+        int node = heap.Dequeue();
+        int d = dist[node];
+        if (node == end)
+            break;  // early exit once destination settled
+
+        if (graph.ContainsKey(node))
+        {
+            foreach (var (weight, neighbor) in graph[node])
+            {
+                int newDist = d + weight;
+                if (newDist < dist[neighbor])
+                {
+                    dist[neighbor] = newDist;
+                    prev[neighbor] = node;  // track predecessor
+                    heap.Enqueue(neighbor, newDist);
+                }
+            }
+        }
+    }
+
+    // Reconstruct path
+    var path = new List<int>();
+    int current = end;
+    while (prev.ContainsKey(current))
+    {
+        path.Add(current);
+        current = prev[current];
+    }
+    path.Add(start);
+    path.Reverse();
+    return (dist[end], path);
+}
 ```
 
 **Dijkstra on a weighted grid**
-```python
-import heapq
+```csharp
+using System;
+using System.Collections.Generic;
 
-def dijkstra_grid(grid: list) -> int:
-    rows, cols = len(grid), len(grid[0])
-    dist = [[float('inf')] * cols for _ in range(rows)]
-    dist[0][0] = grid[0][0]
-    heap = [(grid[0][0], 0, 0)]
+public int DijkstraGrid(int[][] grid)
+{
+    int rows = grid.Length, cols = grid[0].Length;
+    var dist = new Dictionary<(int, int), int>();
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            dist[(r, c)] = int.MaxValue;
+    dist[(0, 0)] = grid[0][0];
 
-    while heap:
-        cost, r, c = heapq.heappop(heap)
-        if cost > dist[r][c]:
-            continue
-        if r == rows - 1 and c == cols - 1:
-            return cost
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols:
-                new_cost = cost + grid[nr][nc]
-                if new_cost < dist[nr][nc]:
-                    dist[nr][nc] = new_cost
-                    heapq.heappush(heap, (new_cost, nr, nc))
-    return dist[rows-1][cols-1]
+    var heap = new PriorityQueue<(int, int, int), int>();  // (cost, r, c), priority
+    heap.Enqueue((grid[0][0], 0, 0), grid[0][0]);
+
+    while (heap.Count > 0)
+    {
+        var (cost, r, c) = heap.Dequeue();
+        if (cost > dist[(r, c)])
+            continue;
+        if (r == rows - 1 && c == cols - 1)
+            return cost;
+
+        int[][] directions = new int[][] { new int[] { -1, 0 }, new int[] { 1, 0 },
+                                            new int[] { 0, -1 }, new int[] { 0, 1 } };
+        foreach (var dir in directions)
+        {
+            int nr = r + dir[0], nc = c + dir[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols)
+            {
+                int newCost = cost + grid[nr][nc];
+                if (newCost < dist[(nr, nc)])
+                {
+                    dist[(nr, nc)] = newCost;
+                    heap.Enqueue((newCost, nr, nc), newCost);
+                }
+            }
+        }
+    }
+    return dist[(rows - 1, cols - 1)];
+}
 ```
 
 ---

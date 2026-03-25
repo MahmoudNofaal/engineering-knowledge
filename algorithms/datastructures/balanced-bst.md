@@ -17,64 +17,67 @@ The key operation is **rotation** — rewiring parent-child pointers to reduce h
 
 ## The Code
 
-**Using Python's sortedcontainers (backed by a sorted list with O(log n) ops)**
-```python
-from sortedcontainers import SortedList
+**Using C# SortedSet (backed by a Red-Black tree with O(log n) ops)**
+```csharp
+using System.Collections.Generic;
 
-sl = SortedList()
-sl.add(5)
-sl.add(2)
-sl.add(8)
-sl.add(1)
+var ss = new SortedSet<int>();
+ss.Add(5);
+ss.Add(2);
+ss.Add(8);
+ss.Add(1);
 
-print(sl)            # SortedList([1, 2, 5, 8])
-print(sl[0])         # 1  — O(log n) index access
-sl.remove(2)         # O(log n) removal
-print(2 in sl)       # O(log n) membership
-print(sl.bisect_left(5))  # 1 — index where 5 would be inserted
+Console.WriteLine(string.Join(", ", ss));       // 1, 2, 5, 8
+Console.WriteLine(ss.Min);         // 1  — O(log n) min access
+ss.Remove(2);         // O(log n) removal
+Console.WriteLine(ss.Contains(2));       // O(log n) membership
 ```
 
 **Range query — find all values between lo and hi**
-```python
-from sortedcontainers import SortedList
+```csharp
+using System.Linq;
 
-sl = SortedList([1, 3, 5, 7, 9, 11])
-lo, hi = 4, 10
-# irange returns an iterator over keys in [lo, hi]
-result = list(sl.irange(lo, hi))  # [5, 7, 9]
+var ss = new SortedSet<int> { 1, 3, 5, 7, 9, 11 };
+int lo = 4, hi = 10;
+// GetViewBetween returns a view/subset of elements in [lo, hi]
+var result = ss.GetViewBetween(lo, hi).ToList();  // [5, 7, 9]
 ```
 
 **AVL rotation — the core rebalancing primitive**
-```python
-class AVLNode:
-    def __init__(self, val):
-        self.val = val
-        self.left = self.right = None
-        self.height = 1
+```csharp
+public class AVLNode
+{
+    public int Val { get; set; }
+    public AVLNode Left { get; set; }
+    public AVLNode Right { get; set; }
+    public int Height { get; set; } = 1;
+}
 
-def get_height(node) -> int:
-    return node.height if node else 0
+private int GetHeight(AVLNode node) => node?.Height ?? 0;
 
-def get_balance(node) -> int:
-    return get_height(node.left) - get_height(node.right) if node else 0
+private int GetBalance(AVLNode node) => node == null ? 0 : GetHeight(node.Left) - GetHeight(node.Right);
 
-def rotate_right(y: AVLNode) -> AVLNode:
-    x = y.left
-    T2 = x.right
-    x.right = y          # perform rotation
-    y.left = T2
-    y.height = 1 + max(get_height(y.left), get_height(y.right))
-    x.height = 1 + max(get_height(x.left), get_height(x.right))
-    return x             # new root
+private AVLNode RotateRight(AVLNode y)
+{
+    var x = y.Left;
+    var t2 = x.Right;
+    x.Right = y;          // perform rotation
+    y.Left = t2;
+    y.Height = 1 + Math.Max(GetHeight(y.Left), GetHeight(y.Right));
+    x.Height = 1 + Math.Max(GetHeight(x.Left), GetHeight(x.Right));
+    return x;             // new root
+}
 
-def rotate_left(x: AVLNode) -> AVLNode:
-    y = x.right
-    T2 = y.left
-    y.left = x
-    x.right = T2
-    x.height = 1 + max(get_height(x.left), get_height(x.right))
-    y.height = 1 + max(get_height(y.left), get_height(y.right))
-    return y
+private AVLNode RotateLeft(AVLNode x)
+{
+    var y = x.Right;
+    var t2 = y.Left;
+    y.Left = x;
+    x.Right = t2;
+    x.Height = 1 + Math.Max(GetHeight(x.Left), GetHeight(x.Right));
+    y.Height = 1 + Math.Max(GetHeight(y.Left), GetHeight(y.Right));
+    return y;
+}
 ```
 
 ---

@@ -18,84 +18,112 @@ You track how many requests a caller (by IP, user ID, or API key) has made in a 
 
 ## The Code
 
-```python
-# Token Bucket — allows bursts, smooths average rate
-import time
-import threading
+```csharp
+// Token Bucket — allows bursts, smooths average rate
+using System;
+using System.Threading;
 
-class TokenBucket:
-    def __init__(self, capacity: int, refill_rate: float):
-        """
-        capacity: max tokens (= max burst size)
-        refill_rate: tokens added per second
-        """
-        self.capacity = capacity
-        self.tokens = capacity
-        self.refill_rate = refill_rate
-        self.last_refill = time.time()
-        self.lock = threading.Lock()
+public class TokenBucket
+{
+    private readonly int _capacity;
+    private readonly double _refillRate;  // tokens per second
+    private double _tokens;
+    private long _lastRefill;
+    private readonly object _lockObject = new();
 
-    def allow(self) -> bool:
-        with self.lock:
-            now = time.time()
-            elapsed = now - self.last_refill
-            # Add tokens for time passed
-            self.tokens = min(
-                self.capacity,
-                self.tokens + elapsed * self.refill_rate
-            )
-            self.last_refill = now
+    public TokenBucket(int capacity, double refillRate)
+    {
+        // capacity: max tokens (= max burst size)
+        // refillRate: tokens added per second
+        _capacity = capacity;
+        _refillRate = refillRate;
+        _tokens = capacity;
+        _lastRefill = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
 
-            if self.tokens >= 1:
-                self.tokens -= 1
-                return True
-            return False
+    public bool Allow()
+    {
+        lock (_lockObject)
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            double elapsed = (now - _lastRefill) / 1000.0;  // seconds
+            // Add tokens for time passed
+            _tokens = Math.Min(_capacity, _tokens + elapsed * _refillRate);
+            _lastRefill = now;
 
-# Usage
-limiter = TokenBucket(capacity=10, refill_rate=2)  # 2 req/sec, burst up to 10
-for i in range(15):
-    print(f"Request {i}: {'allowed' if limiter.allow() else 'rejected'}")
+            if (_tokens >= 1)
+            {
+                _tokens -= 1;
+                return true;
+            }
+            return false;
+        }
+    }
+}
+
+// Usage
+var limiter = new TokenBucket(capacity: 10, refillRate: 2);  // 2 req/sec, burst up to 10
+for (int i = 0; i < 15; i++)
+    Console.WriteLine($"Request {i}: {(limiter.Allow() ? "allowed" : "rejected")}");
 ```
 
-```python
-# Fixed Window Counter using Redis (distributed, safe)
-import redis
-import time
+```csharp
+// Fixed Window Counter using Redis (distributed, safe)
+using StackExchange.Redis;
+using System;
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+public class FixedWindowLimiter
+{
+    private readonly IDatabase _redis;
 
-def is_allowed(user_id: str, limit: int, window_seconds: int) -> bool:
-    key = f"rate:{user_id}:{int(time.time()) // window_seconds}"
-    current = r.incr(key)
-    if current == 1:
-        r.expire(key, window_seconds)  # Set TTL on first request only
-    return current <= limit
+    public bool IsAllowed(string userId, int limit, int windowSeconds)
+    {
+        long windowIndex = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / windowSeconds;
+        string key = $"rate:{userId}:{windowIndex}";
+        long current = _redis.StringIncrement(key);
+        
+        if (current == 1)
+            _redis.KeyExpire(key, TimeSpan.FromSeconds(windowSeconds));  // Set TTL on first request only
+        
+        return current <= limit;
+    }
+}
 
-# Usage
-print(is_allowed("user_123", limit=100, window_seconds=60))
+// Usage
+var limiter = new FixedWindowLimiter();
+Console.WriteLine(limiter.IsAllowed("user_123", limit: 100, windowSeconds: 60));
 ```
 
-```python
-# Sliding Window Log (most accurate, most memory)
-import time
-import redis
+```csharp
+// Sliding Window Log (most accurate, most memory)
+using StackExchange.Redis;
+using System;
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+public class SlidingWindowLimiter
+{
+    private readonly IDatabase _redis;
 
-def is_allowed_sliding(user_id: str, limit: int, window_seconds: int) -> bool:
-    now = time.time()
-    key = f"log:{user_id}"
-    window_start = now - window_seconds
+    public bool IsAllowedSliding(string userId, int limit, int windowSeconds)
+    {
+        double now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+        string key = $"log:{userId}";
+        double windowStart = now - windowSeconds;
 
-    pipe = r.pipeline()
-    pipe.zremrangebyscore(key, 0, window_start)   # Remove old entries
-    pipe.zadd(key, {str(now): now})               # Add current request
-    pipe.zcard(key)                               # Count entries in window
-    pipe.expire(key, window_seconds)
-    results = pipe.execute()
-
-    count = results[2]
-    return count <= limit
+        var transaction = _redis.CreateTransaction();
+        transaction.SortedSetRemoveRangeByScoreAsync(key, 0, windowStart);  // Remove old entries
+        transaction.SortedSetAddAsync(key, now.ToString(), now);           // Add current request
+        transaction.SortedSetLengthAsync(key);                              // Count entries in window
+        transaction.KeyExpireAsync(key, TimeSpan.FromSeconds(windowSeconds));
+        
+        var results = transaction.Execute();
+        
+        // results[2] is the count from SortedSetLengthAsync
+        if (results.Length > 2 && results[2] is int count)
+            return count <= limit;
+        
+        return false;
+    }
+}
 ```
 
 ---

@@ -15,56 +15,82 @@ A stack has two operations: push (add to top) and pop (remove from top). Both ar
 
 ## The Code
 
-**Using Python's list as a stack**
-```python
-stack = []
-stack.append(1)   # push — O(1) amortized
-stack.append(2)
-stack.append(3)
+**Using C#'s Stack as a stack**
+```csharp
+var stack = new Stack<int>();
+stack.Push(1);   // push — O(1) amortized
+stack.Push(2);
+stack.Push(3);
 
-top = stack[-1]   # peek without removing — O(1)
-val = stack.pop() # pop — O(1) amortized
+int top = stack.Peek();   // peek without removing — O(1)
+int val = stack.Pop();    // pop — O(1) amortized
 ```
 
 **Bracket matching — classic stack application**
-```python
-def is_valid(s: str) -> bool:
-    stack = []
-    pairs = {')': '(', ']': '[', '}': '{'}
-    for char in s:
-        if char in '([{':
-            stack.append(char)
-        elif char in ')]}':
-            if not stack or stack[-1] != pairs[char]:
-                return False
-            stack.pop()
-    return len(stack) == 0  # unmatched opens left = invalid
+```csharp
+public static bool IsValid(string s)
+{
+    var stack = new Stack<char>();
+    var pairs = new Dictionary<char, char> { { ')', '(' }, { ']', '[' }, { '}', '{' } };
+    
+    foreach (var ch in s)
+    {
+        if (ch == '(' || ch == '[' || ch == '{')
+            stack.Push(ch);
+        else if (ch == ')' || ch == ']' || ch == '}')
+        {
+            if (stack.Count == 0 || stack.Peek() != pairs[ch])
+                return false;
+            stack.Pop();
+        }
+    }
+    return stack.Count == 0;  // unmatched opens left = invalid
+}
 ```
 
 **Monotonic stack — next greater element in O(n)**
-```python
-def next_greater(items: list) -> list:
-    result = [-1] * len(items)
-    stack = []  # stores indices
-    for i, val in enumerate(items):
-        # pop everything the current value is greater than
-        while stack and items[stack[-1]] < val:
-            result[stack.pop()] = val
-        stack.append(i)
-    return result
+```csharp
+public static List<int> NextGreater(List<int> items)
+{
+    var result = Enumerable.Repeat(-1, items.Count).ToList();
+    var stack = new Stack<int>();  // stores indices
+    
+    for (int i = 0; i < items.Count; i++)
+    {
+        // pop everything the current value is greater than
+        while (stack.Count > 0 && items[stack.Peek()] < items[i])
+            result[stack.Pop()] = items[i];
+        stack.Push(i);
+    }
+    return result;
+}
 ```
 
 **DFS using an explicit stack instead of recursion**
-```python
-def dfs_iterative(graph: dict, start: int) -> list:
-    visited, stack, order = set(), [start], []
-    while stack:
-        node = stack.pop()
-        if node not in visited:
-            visited.add(node)
-            order.append(node)
-            stack.extend(graph[node])  # push neighbors
-    return order
+```csharp
+public static List<int> DfsIterative(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int>();
+    var stack = new Stack<int>();
+    var order = new List<int>();
+    
+    stack.Push(start);
+    while (stack.Count > 0)
+    {
+        int node = stack.Pop();
+        if (!visited.Contains(node))
+        {
+            visited.Add(node);
+            order.Add(node);
+            if (graph.ContainsKey(node))
+            {
+                foreach (var neighbor in graph[node])
+                    stack.Push(neighbor);
+            }
+        }
+    }
+    return order;
+}
 ```
 
 ---

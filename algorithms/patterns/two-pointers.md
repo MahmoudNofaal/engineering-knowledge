@@ -16,84 +16,120 @@ Two pointers eliminates the inner loop by using the sorted order (or structure) 
 ## The Code
 
 **Two sum on sorted array — O(n)**
-```python
-def two_sum_sorted(items: list, target: int) -> tuple:
-    lo, hi = 0, len(items) - 1
-    while lo < hi:
-        s = items[lo] + items[hi]
-        if s == target:
-            return (lo, hi)
-        elif s < target:
-            lo += 1    # sum too small — advance left to increase it
-        else:
-            hi -= 1    # sum too large — retreat right to decrease it
-    return (-1, -1)
+```csharp
+public static (int, int) TwoSumSorted(List<int> items, int target)
+{
+    int lo = 0, hi = items.Count - 1;
+    while (lo < hi)
+    {
+        int s = items[lo] + items[hi];
+        if (s == target)
+            return (lo, hi);
+        else if (s < target)
+            lo++;    // sum too small — advance left to increase it
+        else
+            hi--;    // sum too large — retreat right to decrease it
+    }
+    return (-1, -1);
+}
 ```
 
 **Three sum — reduce to two sum with an outer loop**
-```python
-def three_sum(nums: list) -> list:
-    nums.sort()
-    result = []
-    for i in range(len(nums) - 2):
-        if i > 0 and nums[i] == nums[i - 1]:
-            continue                          # skip duplicates at outer level
-        lo, hi = i + 1, len(nums) - 1
-        while lo < hi:
-            s = nums[i] + nums[lo] + nums[hi]
-            if s == 0:
-                result.append([nums[i], nums[lo], nums[hi]])
-                while lo < hi and nums[lo] == nums[lo + 1]: lo += 1  # skip dupes
-                while lo < hi and nums[hi] == nums[hi - 1]: hi -= 1
-                lo += 1; hi -= 1
-            elif s < 0:
-                lo += 1
-            else:
-                hi -= 1
-    return result
+```csharp
+public static List<List<int>> ThreeSum(int[] nums)
+{
+    Array.Sort(nums);
+    var result = new List<List<int>>();
+    
+    for (int i = 0; i < nums.Length - 2; i++)
+    {
+        if (i > 0 && nums[i] == nums[i - 1])
+            continue;                          // skip duplicates at outer level
+        
+        int lo = i + 1, hi = nums.Length - 1;
+        while (lo < hi)
+        {
+            long s = (long)nums[i] + nums[lo] + nums[hi];
+            if (s == 0)
+            {
+                result.Add(new List<int> { nums[i], nums[lo], nums[hi] });
+                while (lo < hi && nums[lo] == nums[lo + 1]) lo++;  // skip dupes
+                while (lo < hi && nums[hi] == nums[hi - 1]) hi--;
+                lo++; hi--;
+            }
+            else if (s < 0)
+                lo++;
+            else
+                hi--;
+        }
+    }
+    return result;
+}
 ```
 
 **Container with most water — maximize area**
-```python
-def max_area(heights: list) -> int:
-    lo, hi = 0, len(heights) - 1
-    best = 0
-    while lo < hi:
-        area = min(heights[lo], heights[hi]) * (hi - lo)
-        best = max(best, area)
-        if heights[lo] < heights[hi]:
-            lo += 1    # shorter side limits us — move it inward to possibly improve
-        else:
-            hi -= 1
-    return best
+```csharp
+public static int MaxArea(int[] heights)
+{
+    int lo = 0, hi = heights.Length - 1;
+    int best = 0;
+    while (lo < hi)
+    {
+        int area = Math.Min(heights[lo], heights[hi]) * (hi - lo);
+        best = Math.Max(best, area);
+        if (heights[lo] < heights[hi])
+            lo++;    // shorter side limits us — move it inward to possibly improve
+        else
+            hi--;
+    }
+    return best;
+}
 ```
 
 **Remove duplicates from sorted array in-place**
-```python
-def remove_duplicates(nums: list) -> int:
-    if not nums:
-        return 0
-    slow = 0
-    for fast in range(1, len(nums)):
-        if nums[fast] != nums[slow]:
-            slow += 1
-            nums[slow] = nums[fast]    # write pointer lags behind read pointer
+```csharp
+public static int RemoveDuplicates(int[] nums)
+{
+    if (nums.Length == 0)
+        return 0;
+    int slow = 0;
+    for (int fast = 1; fast < nums.Length; fast++)
+    {
+        if (nums[fast] != nums[slow])
+        {
+            slow++;
+            nums[slow] = nums[fast];    // write pointer lags behind read pointer
+        }
+    }
+    return slow + 1;
+}
+```
     return slow + 1
 ```
 
 **Merge two sorted arrays into one**
-```python
-def merge_sorted(a: list, b: list) -> list:
-    result = []
-    i = j = 0
-    while i < len(a) and j < len(b):
-        if a[i] <= b[j]:
-            result.append(a[i]); i += 1
-        else:
-            result.append(b[j]); j += 1
-    result.extend(a[i:])
-    result.extend(b[j:])
-    return result
+```csharp
+public List<int> MergeSorted(List<int> a, List<int> b)
+{
+    var result = new List<int>();
+    int i = 0, j = 0;
+    while (i < a.Count && j < b.Count)
+    {
+        if (a[i] <= b[j])
+        {
+            result.Add(a[i]);
+            i++;
+        }
+        else
+        {
+            result.Add(b[j]);
+            j++;
+        }
+    }
+    result.AddRange(a.Skip(i));
+    result.AddRange(b.Skip(j));
+    return result;
+}
 ```
 
 ---

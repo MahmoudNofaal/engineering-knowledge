@@ -23,87 +23,112 @@ The crossover points matter: insertion sort beats merge sort and quick sort belo
 
 ## The Code
 
-**Python built-in sort — always reach for this first**
-```python
-# list.sort() — in-place Timsort, O(n log n), stable
-items = [3, 1, 4, 1, 5, 9, 2, 6]
-items.sort()
+**C# built-in sort — always reach for this first**
+```csharp
+// List.Sort() — in-place using QuickSort/HeapSort hybrid, O(n log n) worst-case
+var items = new List<int> { 3, 1, 4, 1, 5, 9, 2, 6 };
+items.Sort();
 
-# sorted() — returns new list, same Timsort
-items = sorted([3, 1, 4, 1, 5, 9, 2, 6])
+// LINQ OrderBy — returns new collection, O(n log n)
+items = new List<int> { 3, 1, 4, 1, 5, 9, 2, 6 };
+var sorted = items.OrderBy(x => x).ToList();
 
-# custom key — sort by second element of tuple
-pairs = [(1, 'b'), (2, 'a'), (3, 'c')]
-pairs.sort(key=lambda x: x[1])
+// Custom comparison — sort by second element of tuple
+var pairs = new List<(int, string)> { (1, "b"), (2, "a"), (3, "c") };
+pairs.Sort((a, b) => a.Item2.CompareTo(b.Item2));
 
-# multi-key sort — primary by age, secondary by name
-people = [('Alice', 30), ('Bob', 25), ('Carol', 30)]
-people.sort(key=lambda p: (p[1], p[0]))
+// Multi-key sort — primary by age, secondary by name
+var people = new List<(string name, int age)> 
+    { ("Alice", 30), ("Bob", 25), ("Carol", 30) };
+people.Sort((a, b) => {
+    int ageComp = a.age.CompareTo(b.age);
+    return ageComp != 0 ? ageComp : a.name.CompareTo(b.name);
+});
 ```
 
 **Stability matters — multi-pass sort**
-```python
-# Sort students: primary by grade descending, secondary by name ascending
-# Stable sort lets you do this in two passes
-students = [('Alice', 'B'), ('Bob', 'A'), ('Carol', 'B'), ('Dave', 'A')]
-students.sort(key=lambda s: s[0])          # pass 1: sort by name
-students.sort(key=lambda s: s[1])          # pass 2: sort by grade (stable = names preserved within grade)
+```csharp
+// Sort students: primary by grade descending, secondary by name ascending
+// Stable sort lets you do this in two passes (though one-pass is better)
+var students = new List<(string name, string grade)> 
+    { ("Alice", "B"), ("Bob", "A"), ("Carol", "B"), ("Dave", "A") };
+    
+// Sort by name first — stable sort preserves this when sorting by grade
+var sorted = students
+    .OrderBy(s => s.name)                // pass 1: sort by name
+    .ThenBy(s => s.grade)                // pass 2: sort by grade (LINQ is stable)
+    .ToList();
 ```
 
 **When to use counting/radix sort over built-in**
-```python
-import time
+```csharp
+using System;
+using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
 
-# Scenario: sort 1 million integers in range [0, 1000]
-# Timsort: O(n log n) = ~20 million comparisons
-# Counting sort: O(n + k) = ~1 million + 1000 operations
+// Scenario: sort 1 million integers in range [0, 1000]
+// Built-in sort: O(n log n) = ~20 million comparisons
+// Counting sort: O(n + k) = ~1 million + 1000 operations
 
-def counting_sort_perf(items: list, k: int) -> list:
-    count = [0] * (k + 1)
-    for val in items:
-        count[val] += 1
-    return [val for val, cnt in enumerate(count) for _ in range(cnt)]
+public static List<int> CountingSortPerf(List<int> items, int k)
+{
+    var count = new int[k + 1];
+    foreach (var val in items)
+        count[val]++;
+    
+    var result = new List<int>();
+    for (int i = 0; i <= k; i++)
+        for (int j = 0; j < count[i]; j++)
+            result.Add(i);
+    return result;
+}
 
-import random
-data = [random.randint(0, 1000) for _ in range(1_000_000)]
+var random = new Random();
+var data = Enumerable.Range(0, 1000000)
+    .Select(_ => random.Next(0, 1001))
+    .ToList();
 
-start = time.time()
-sorted(data)
-print(f"Timsort:       {time.time() - start:.3f}s")
+var sw = Stopwatch.StartNew();
+var sorted = data.OrderBy(x => x).ToList();
+sw.Stop();
+Console.WriteLine($"Built-in sort: {sw.Elapsed.TotalSeconds:F3}s");
 
-start = time.time()
-counting_sort_perf(data, 1000)
-print(f"Counting sort: {time.time() - start:.3f}s")
-# Counting sort is measurably faster here
+sw.Restart();
+var result = CountingSortPerf(data, 1000);
+sw.Stop();
+Console.WriteLine($"Counting sort: {sw.Elapsed.TotalSeconds:F3}s");
+// Counting sort is measurably faster here
 ```
 
 **Choosing the right sort — decision tree in code comments**
-```python
-def choose_sort(data, stable_required, key_range=None):
-    # 1. Small input (< 20 elements)?
-    #    → insertion sort or just use built-in (it does this internally)
+```csharp
+public static void ChooseSort(List<int> data, bool stableRequired, int? keyRange = null)
+{
+    // 1. Small input (< 20 elements)?
+    //    → Insertion sort or just use built-in (it does this internally)
 
-    # 2. Nearly sorted?
-    #    → Timsort (built-in) exploits existing runs — close to O(n)
+    // 2. Nearly sorted?
+    //    → Built-in sort exploits existing runs — close to O(n)
 
-    # 3. Integer keys with small range k where k ≈ n?
-    #    → counting sort: O(n + k)
+    // 3. Integer keys with small range k where k ≈ n?
+    //    → Counting sort: O(n + k)
 
-    # 4. Integer keys with large range but fixed digit count?
-    #    → radix sort: O(d × n)
+    // 4. Integer keys with large range but fixed digit count?
+    //    → Radix sort: O(d × n)
 
-    # 5. Stable sort required for arbitrary objects?
-    #    → Python built-in (Timsort), Java Arrays.sort for objects
+    // 5. Stable sort required for arbitrary objects?
+    //    → C# LINQ OrderBy/ThenBy (stable by design)
 
-    # 6. In-place required, no stability needed?
-    #    → quick sort or heap sort; or built-in if language uses introsort
+    // 6. In-place required, no stability needed?
+    //    → C# List.Sort() uses Introspective Sort (O(n log n) worst case)
 
-    # 7. Sorting a linked list?
-    #    → merge sort: no random access needed, O(log n) stack space
+    // 7. Sorting a linked list?
+    //    → Merge sort: no random access needed, O(log n) stack space
 
-    # 8. Everything else?
-    #    → built-in sort. It's probably Timsort or introsort. Trust it.
-    pass
+    // 8. Everything else?
+    //    → Built-in sort. It's probably using Timsort or Introsort. Trust it.
+}
 ```
 
 ---

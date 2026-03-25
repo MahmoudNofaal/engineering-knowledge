@@ -15,79 +15,125 @@ Imagine a circle (the hash ring) spanning 0 to 2³². Every node is hashed to a 
 ---
 
 ## The Code
-```python
-# ── Consistent hashing with virtual nodes ────────────────────────────────
-import hashlib
-import bisect
+```csharp
+// ── Consistent hashing with virtual nodes ────────────────────────────────
+using System;
+using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
 
-class ConsistentHashRing:
-    def __init__(self, nodes: list[str] = [], replicas: int = 150):
-        """
-        replicas: number of virtual nodes per physical node.
-        Higher = better distribution, more memory overhead.
-        150 is a common production default.
-        """
-        self.replicas = replicas
-        self.ring: dict[int, str] = {}   # hash position → physical node
-        self.sorted_keys: list[int] = [] # sorted list of hash positions
+public class ConsistentHashRing
+{
+    private int _replicas;
+    private Dictionary<long, string> _ring;      // hash position → physical node
+    private List<long> _sortedKeys;              // sorted list of hash positions
 
-        for node in nodes:
-            self.add_node(node)
+    public ConsistentHashRing(List<string> nodes = null, int replicas = 150)
+    {
+        // replicas: number of virtual nodes per physical node.
+        // Higher = better distribution, more memory overhead.
+        // 150 is a common production default.
+        _replicas = replicas;
+        _ring = new Dictionary<long, string>();
+        _sortedKeys = new List<long>();
 
-    def _hash(self, key: str) -> int:
-        return int(hashlib.md5(key.encode()).hexdigest(), 16)
+        if (nodes != null)
+        {
+            foreach (var node in nodes)
+                AddNode(node);
+        }
+    }
 
-    def add_node(self, node: str) -> None:
-        for i in range(self.replicas):
-            vnode_key = f"{node}:vnode:{i}"
-            position  = self._hash(vnode_key)
-            self.ring[position] = node
-            bisect.insort(self.sorted_keys, position)   # keep sorted
+    private long Hash(string key)
+    {
+        using (var md5 = MD5.Create())
+        {
+            byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(key));
+            return BitConverter.ToInt64(hash, 0);
+        }
+    }
 
-    def remove_node(self, node: str) -> None:
-        for i in range(self.replicas):
-            vnode_key = f"{node}:vnode:{i}"
-            position  = self._hash(vnode_key)
-            del self.ring[position]
-            self.sorted_keys.remove(position)
+    public void AddNode(string node)
+    {
+        for (int i = 0; i < _replicas; i++)
+        {
+            string vnodeKey = $"{node}:vnode:{i}";
+            long position = Hash(vnodeKey);
+            _ring[position] = node;
+            _sortedKeys.Add(position);
+            _sortedKeys.Sort();  // keep sorted
+        }
+    }
 
-    def get_node(self, key: str) -> str:
-        """Find the node responsible for this key."""
-        if not self.ring:
-            raise RuntimeError("Ring is empty — no nodes available.")
-        position = self._hash(key)
-        # Find first node clockwise from this position
-        idx = bisect.bisect(self.sorted_keys, position) % len(self.sorted_keys)
-        return self.ring[self.sorted_keys[idx]]
+    public void RemoveNode(string node)
+    {
+        for (int i = 0; i < _replicas; i++)
+        {
+            string vnodeKey = $"{node}:vnode:{i}";
+            long position = Hash(vnodeKey);
+            _ring.Remove(position);
+            _sortedKeys.Remove(position);
+        }
+    }
+
+    public string GetNode(string key)
+    {
+        // Find the node responsible for this key.
+        if (_ring.Count == 0)
+            throw new InvalidOperationException("Ring is empty — no nodes available.");
+
+        long position = Hash(key);
+        // Find first node clockwise from this position
+        int idx = _sortedKeys.BinarySearch(position);
+        if (idx < 0)
+            idx = ~idx;  // BinarySearch returns negative insertion point if not found
+        idx = idx % _sortedKeys.Count;
+        return _ring[_sortedKeys[idx]];
+    }
+}
 
 
-# ── Usage ─────────────────────────────────────────────────────────────────
-ring = ConsistentHashRing(nodes=["cache-1", "cache-2", "cache-3"])
+// ── Usage ─────────────────────────────────────────────────────────────────
+var ring = new ConsistentHashRing(new List<string> { "cache-1", "cache-2", "cache-3" });
 
-keys = ["user:1001", "user:1002", "session:abc", "product:999", "feed:42"]
-for key in keys:
-    print(f"{key:20} → {ring.get_node(key)}")
+var keys = new[] { "user:1001", "user:1002", "session:abc", "product:999", "feed:42" };
+foreach (var key in keys)
+{
+    Console.WriteLine($"{key,-20} → {ring.GetNode(key)}");
+}
 
-print("\n--- Adding cache-4 ---")
-ring.add_node("cache-4")
-for key in keys:
-    print(f"{key:20} → {ring.get_node(key)}")
-# Only ~25% of keys should change nodes — the rest stay put.
+Console.WriteLine("\n--- Adding cache-4 ---");
+ring.AddNode("cache-4");
+foreach (var key in keys)
+{
+    Console.WriteLine($"{key,-20} → {ring.GetNode(key)}");
+}
+// Only ~25% of keys should change nodes — the rest stay put.
 ```
-```python
-# ── Distribution analysis — verify vnodes are working ────────────────────
-from collections import Counter
+```csharp
+// ── Distribution analysis — verify vnodes are working ────────────────────
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-ring   = ConsistentHashRing(nodes=["cache-1", "cache-2", "cache-3"], replicas=150)
-sample = [f"key:{i}" for i in range(10_000)]
+var ring = new ConsistentHashRing(
+    new List<string> { "cache-1", "cache-2", "cache-3" }, 
+    replicas: 150);
 
-distribution = Counter(ring.get_node(k) for k in sample)
-for node, count in sorted(distribution.items()):
-    bar = "█" * (count // 50)
-    print(f"{node}: {count:>5} keys  {bar}")
+var sample = Enumerable.Range(0, 10_000).Select(i => $"key:{i}").ToList();
 
-# With replicas=150, expect roughly 33% ± 5% per node.
-# With replicas=1, distribution will be wildly uneven.
+var distribution = sample
+    .GroupBy(k => ring.GetNode(k))
+    .ToDictionary(g => g.Key, g => g.Count());
+
+foreach (var (node, count) in distribution.OrderBy(x => x.Key))
+{
+    string bar = new string('█', count / 50);
+    Console.WriteLine($"{node}: {count,>5} keys  {bar}");
+}
+
+// With replicas=150, expect roughly 33% ± 5% per node.
+// With replicas=1, distribution will be wildly uneven.
 ```
 
 ---

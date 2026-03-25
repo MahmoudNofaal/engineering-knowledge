@@ -18,103 +18,134 @@ The core data structure is a **trie** (prefix tree): each node represents a char
 
 ## The Code
 
-```python
-# Trie node with top-K completions stored at each node
-from collections import defaultdict
-import heapq
+```csharp
+// Trie node with top-K completions stored at each node
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-class TrieNode:
-    def __init__(self):
-        self.children: dict[str, "TrieNode"] = {}
-        self.top_completions: list[tuple[int, str]] = []  # (score, word)
+public class TrieNode
+{
+    public Dictionary<char, TrieNode> Children { get; set; } = new();
+    public List<(int Score, string Word)> TopCompletions { get; set; } = new();
+}
 
-class AutocompleteTrie:
-    def __init__(self, k: int = 5):
-        self.root = TrieNode()
-        self.k = k  # Store top-K at every node
+public class AutocompleteTrie
+{
+    private readonly TrieNode _root;
+    private readonly int _k;
 
-    def insert(self, word: str, score: int):
-        """Insert a word with its popularity score."""
-        node = self.root
-        for char in word:
-            if char not in node.children:
-                node.children[char] = TrieNode()
-            node = node.children[char]
+    public AutocompleteTrie(int k = 5)
+    {
+        _root = new TrieNode();
+        _k = k;
+    }
 
-            # Maintain top-K completions at this node (min-heap)
-            heapq.heappush(node.top_completions, (score, word))
-            if len(node.top_completions) > self.k:
-                heapq.heappop(node.top_completions)
+    public void Insert(string word, int score)
+    {
+        var node = _root;
+        foreach (var ch in word)
+        {
+            if (!node.Children.ContainsKey(ch))
+                node.Children[ch] = new TrieNode();
+            node = node.Children[ch];
 
-    def search(self, prefix: str) -> list[str]:
-        """Return top-K completions for the given prefix."""
-        node = self.root
-        for char in prefix:
-            if char not in node.children:
-                return []  # No completions exist
-            node = node.children[char]
+            // Maintain top-K completions at this node (min-heap simulation via List)
+            node.TopCompletions.Add((score, word));
+            node.TopCompletions = node.TopCompletions.OrderByDescending(x => x.Score).Take(_k).ToList();
+        }
+    }
 
-        # Return sorted descending by score
-        results = sorted(node.top_completions, reverse=True)
-        return [word for score, word in results]
+    public List<string> Search(string prefix)
+    {
+        var node = _root;
+        foreach (var ch in prefix)
+        {
+            if (!node.Children.ContainsKey(ch))
+                return new List<string>();
+            node = node.Children[ch];
+        }
 
-# Usage
-trie = AutocompleteTrie(k=3)
-trie.insert("apple", 100)
-trie.insert("application", 80)
-trie.insert("apply", 60)
-trie.insert("apt", 40)
-trie.insert("banana", 90)
+        // Return sorted descending by score
+        return node.TopCompletions.OrderByDescending(x => x.Score)
+            .Select(x => x.Word).ToList();
+    }
+}
 
-print(trie.search("app"))   # → ['apple', 'application', 'apply']
-print(trie.search("ban"))   # → ['banana']
-print(trie.search("xyz"))   # → []
+// Usage
+var trie = new AutocompleteTrie(k: 3);
+trie.Insert("apple", 100);
+trie.Insert("application", 80);
+trie.Insert("apply", 60);
+trie.Insert("apt", 40);
+trie.Insert("banana", 90);
+
+Console.WriteLine(string.Join(", ", trie.Search("app")));   // → apple, application, apply
+Console.WriteLine(string.Join(", ", trie.Search("ban")));   // → banana
+Console.WriteLine(string.Join(", ", trie.Search("xyz")));   // → (empty)
 ```
 
-```python
-# Redis sorted set approach — easier incremental updates than trie
-# Each prefix maps to a sorted set of (score, completion) pairs
+```csharp
+// Redis sorted set approach — easier incremental updates than trie
+// Each prefix maps to a sorted set of (score, completion) pairs
 
-import redis
+using StackExchange.Redis;
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+var redis = ConnectionMultiplexer.Connect("localhost:6379");
+var db = redis.GetDatabase();
 
-def index_query(query: str, score: int):
-    """Index all prefixes of a query with its score."""
-    for i in range(1, len(query) + 1):
-        prefix = query[:i]
-        r.zadd(f"autocomplete:{prefix}", {query: score})
+void IndexQuery(string query, int score)
+{
+    // Index all prefixes of a query with its score
+    for (int i = 1; i <= query.Length; i++)
+    {
+        var prefix = query.Substring(0, i);
+        db.SortedSetAdd($"autocomplete:{prefix}", query, score);
+    }
+}
 
-def get_suggestions(prefix: str, k: int = 5) -> list[str]:
-    """Fetch top-K completions for a prefix, sorted by score desc."""
-    results = r.zrevrange(f"autocomplete:{prefix}", 0, k - 1)
-    return [r.decode() for r in results]
+List<string> GetSuggestions(string prefix, int k = 5)
+{
+    // Fetch top-K completions for a prefix, sorted by score desc
+    var results = db.SortedSetRangeByRankWithScores($"autocomplete:{prefix}", 0, k - 1, Order.Descending);
+    return results.Select(x => x.Element.ToString()).ToList();
+}
 
-# Index some queries
-index_query("apple", 100)
-index_query("application", 80)
-index_query("apply", 60)
+// Index some queries
+IndexQuery("apple", 100);
+IndexQuery("application", 80);
+IndexQuery("apply", 60);
 
-print(get_suggestions("app"))   # → ['apple', 'application', 'apply']
+Console.WriteLine(string.Join(", ", GetSuggestions("app")));   // → apple, application, apply
 ```
 
-```python
-# Query log aggregation — offline job to update scores
-from collections import Counter
-import json
+```csharp
+// Query log aggregation — offline job to update scores
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
 
-def aggregate_query_logs(log_file: str) -> list[tuple[str, int]]:
-    """
-    Read raw query logs, count frequency, return sorted list.
-    This runs as a batch job (e.g., Spark, daily cron).
-    """
-    counts = Counter()
-    with open(log_file) as f:
-        for line in f:
-            entry = json.loads(line)
-            query = entry["query"].lower().strip()
-            counts[query] += 1
-    return counts.most_common()
+public List<(string Query, int Count)> AggregateQueryLogs(string logFile)
+{
+    // Read raw query logs, count frequency, return sorted list.
+    // This runs as a batch job (e.g., Spark, daily cron).
+    var counts = new Dictionary<string, int>();
+    
+    foreach (var line in File.ReadLines(logFile))
+    {
+        var entry = JsonSerializer.Deserialize<Dictionary<string, object>>(line);
+        var query = entry["query"].ToString().ToLower().Trim();
+        
+        if (counts.ContainsKey(query))
+            counts[query]++;
+        else
+            counts[query] = 1;
+    }
+    
+    return counts.OrderByDescending(x => x.Value).Select(x => (x.Key, x.Value)).ToList();
+}
 ```
 
 ---

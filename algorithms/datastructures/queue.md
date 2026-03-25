@@ -15,69 +15,94 @@ A queue enforces strict ordering: the first element in is the first element out.
 
 ## The Code
 
-**Correct queue usage with deque**
-```python
-from collections import deque
+**Correct queue usage with Queue**
+```csharp
+var queue = new Queue<int>();
+queue.Enqueue(1);        // enqueue — O(1)
+queue.Enqueue(2);
+queue.Enqueue(3);
 
-queue = deque()
-queue.append(1)      # enqueue — O(1)
-queue.append(2)
-queue.append(3)
-
-front = queue[0]     # peek — O(1)
-val = queue.popleft() # dequeue — O(1), NOT queue.pop(0)
+int front = queue.Peek();    // peek — O(1)
+int val = queue.Dequeue();   // dequeue — O(1)
 ```
 
 **BFS — the definitive queue application**
-```python
-from collections import deque
-
-def bfs(graph: dict, start: int) -> list:
-    visited = set([start])
-    queue = deque([start])
-    order = []
-    while queue:
-        node = queue.popleft()
-        order.append(node)
-        for neighbor in graph[node]:
-            if neighbor not in visited:
-                visited.add(neighbor)
-                queue.append(neighbor)
-    return order
+```csharp
+public static List<int> Bfs(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int> { start };
+    var queue = new Queue<int>();
+    var order = new List<int>();
+    queue.Enqueue(start);
+    
+    while (queue.Count > 0)
+    {
+        int node = queue.Dequeue();
+        order.Add(node);
+        foreach (var neighbor in graph[node])
+        {
+            if (!visited.Contains(neighbor))
+            {
+                visited.Add(neighbor);
+                queue.Enqueue(neighbor);
+            }
+        }
+    }
+    return order;
+}
 ```
 
 **BFS shortest path — track distance per layer**
-```python
-from collections import deque
-
-def shortest_path(graph: dict, start: int, end: int) -> int:
-    visited = set([start])
-    queue = deque([(start, 0)])  # (node, distance)
-    while queue:
-        node, dist = queue.popleft()
-        if node == end:
-            return dist
-        for neighbor in graph[node]:
-            if neighbor not in visited:
-                visited.add(neighbor)
-                queue.append((neighbor, dist + 1))
-    return -1  # unreachable
+```csharp
+public static int ShortestPath(Dictionary<int, List<int>> graph, int start, int end)
+{
+    var visited = new HashSet<int> { start };
+    var queue = new Queue<(int node, int dist)>();
+    queue.Enqueue((start, 0));
+    
+    while (queue.Count > 0)
+    {
+        var (node, dist) = queue.Dequeue();
+        if (node == end)
+            return dist;
+        
+        foreach (var neighbor in graph[node])
+        {
+            if (!visited.Contains(neighbor))
+            {
+                visited.Add(neighbor);
+                queue.Enqueue((neighbor, dist + 1));
+            }
+        }
+    }
+    return -1;  // unreachable
+}
 ```
 
-**Sliding window maximum using a monotonic deque**
-```python
-from collections import deque
-
-def max_sliding_window(items: list, k: int) -> list:
-    dq = deque()  # stores indices, front is always the max
-    result = []
-    for i, val in enumerate(items):
-        # remove indices outside the window
-        while dq and dq[0] < i - k + 1:
-            dq.popleft()
-        # remove indices whose values are smaller than current
-        while dq and items[dq[-1]] < val:
-            dq.pop()
+**Sliding window maximum using a deque**
+```csharp
+public static List<int> MaxSlidingWindow(List<int> items, int k)
+{
+    var dq = new LinkedList<int>();  // stores indices, front is always the max
+    var result = new List<int>();
+    
+    for (int i = 0; i < items.Count; i++)
+    {
+        // remove indices outside the window
+        if (dq.Count > 0 && dq.First.Value < i - k + 1)
+            dq.RemoveFirst();
+        
+        // remove indices whose values are smaller than current
+        while (dq.Count > 0 && items[dq.Last.Value] < items[i])
+            dq.RemoveLast();
+        
+        dq.AddLast(i);
+        if (i >= k - 1)
+            result.Add(items[dq.First.Value]);
+    }
+    return result;
+}
+```
         dq.append(i)
         if i >= k - 1:
             result.append(items[dq[0]])

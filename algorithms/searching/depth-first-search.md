@@ -18,102 +18,190 @@ The recursive form is natural because the call stack handles backtracking automa
 ## The Code
 
 **DFS on a graph — recursive**
-```python
-def dfs_recursive(graph: dict, node: int, visited: set) -> None:
-    visited.add(node)
-    print(node)
-    for neighbor in graph[node]:
-        if neighbor not in visited:
-            dfs_recursive(graph, neighbor, visited)
+```csharp
+public void DfsRecursive(Dictionary<int, List<int>> graph, int node, HashSet<int> visited)
+{
+    visited.Add(node);
+    Console.WriteLine(node);
+    foreach (int neighbor in graph[node])
+    {
+        if (!visited.Contains(neighbor))
+            DfsRecursive(graph, neighbor, visited);
+    }
+}
 
-graph = {0: [1, 2], 1: [0, 3], 2: [0], 3: [1]}
-visited = set()
-dfs_recursive(graph, 0, visited)
+var graph = new Dictionary<int, List<int>>
+{
+    {0, new List<int> {1, 2}},
+    {1, new List<int> {0, 3}},
+    {2, new List<int> {0}},
+    {3, new List<int> {1}}
+};
+var visited = new HashSet<int>();
+DfsRecursive(graph, 0, visited);
 ```
 
 **DFS on a graph — iterative**
-```python
-def dfs_iterative(graph: dict, start: int) -> list:
-    visited, stack, order = set(), [start], []
-    while stack:
-        node = stack.pop()
-        if node not in visited:
-            visited.add(node)
-            order.append(node)
-            stack.extend(graph[node])   # neighbors pushed; last is explored first
-    return order
+```csharp
+public List<int> DfsIterative(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int>();
+    var stack = new Stack<int>();
+    var order = new List<int>();
+    stack.Push(start);
+    
+    while (stack.Count > 0)
+    {
+        int node = stack.Pop();
+        if (!visited.Contains(node))
+        {
+            visited.Add(node);
+            order.Add(node);
+            foreach (int neighbor in graph[node])
+                stack.Push(neighbor);   // neighbors pushed; last is explored first
+        }
+    }
+    return order;
+}
 ```
 
 **DFS on a binary tree — all three orders**
-```python
-class TreeNode:
-    def __init__(self, val, left=None, right=None):
-        self.val = val; self.left = left; self.right = right
+```csharp
+public class TreeNode
+{
+    public int Val;
+    public TreeNode Left, Right;
+    public TreeNode(int val, TreeNode left = null, TreeNode right = null)
+    {
+        Val = val;
+        Left = left;
+        Right = right;
+    }
+}
 
-def inorder(node: TreeNode) -> list:    # left → node → right
-    return inorder(node.left) + [node.val] + inorder(node.right) if node else []
+public List<int> Inorder(TreeNode node)    // left → node → right
+{
+    var result = new List<int>();
+    if (node != null)
+    {
+        result.AddRange(Inorder(node.Left));
+        result.Add(node.Val);
+        result.AddRange(Inorder(node.Right));
+    }
+    return result;
+}
 
-def preorder(node: TreeNode) -> list:   # node → left → right
-    return [node.val] + preorder(node.left) + preorder(node.right) if node else []
+public List<int> Preorder(TreeNode node)   // node → left → right
+{
+    var result = new List<int>();
+    if (node != null)
+    {
+        result.Add(node.Val);
+        result.AddRange(Preorder(node.Left));
+        result.AddRange(Preorder(node.Right));
+    }
+    return result;
+}
 
-def postorder(node: TreeNode) -> list:  # left → right → node
-    return postorder(node.left) + postorder(node.right) + [node.val] if node else []
+public List<int> Postorder(TreeNode node)  // left → right → node
+{
+    var result = new List<int>();
+    if (node != null)
+    {
+        result.AddRange(Postorder(node.Left));
+        result.AddRange(Postorder(node.Right));
+        result.Add(node.Val);
+    }
+    return result;
+}
 ```
 
 **Cycle detection in a directed graph — three-color DFS**
-```python
-def has_cycle(graph: dict) -> bool:
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = {node: WHITE for node in graph}
+```csharp
+const int WHITE = 0, GRAY = 1, BLACK = 2;
 
-    def dfs(node: int) -> bool:
-        color[node] = GRAY                    # currently being explored
-        for neighbor in graph[node]:
-            if color[neighbor] == GRAY:
-                return True                   # back edge = cycle
-            if color[neighbor] == WHITE and dfs(neighbor):
-                return True
-        color[node] = BLACK                   # fully explored
-        return False
+public bool HasCycle(Dictionary<int, List<int>> graph)
+{
+    var color = new Dictionary<int, int>();
+    foreach (int node in graph.Keys)
+        color[node] = WHITE;
 
-    return any(dfs(n) for n in graph if color[n] == WHITE)
+    bool Dfs(int node)
+    {
+        color[node] = GRAY;                    // currently being explored
+        foreach (int neighbor in graph[node])
+        {
+            if (color[neighbor] == GRAY)
+                return true;                   // back edge = cycle
+            if (color[neighbor] == WHITE && Dfs(neighbor))
+                return true;
+        }
+        color[node] = BLACK;                   // fully explored
+        return false;
+    }
+
+    foreach (int node in graph.Keys)
+    {
+        if (color[node] == WHITE && Dfs(node))
+            return true;
+    }
+    return false;
+}
 ```
 
 **Backtracking DFS — all subsets**
-```python
-def subsets(nums: list) -> list:
-    result, path = [], []
+```csharp
+public List<List<int>> Subsets(int[] nums)
+{
+    var result = new List<List<int>>();
+    var path = new List<int>();
 
-    def dfs(start: int) -> None:
-        result.append(path[:])               # snapshot current path
-        for i in range(start, len(nums)):
-            path.append(nums[i])
-            dfs(i + 1)                       # explore with nums[i] included
-            path.pop()                       # backtrack — undo the choice
+    void Dfs(int start)
+    {
+        result.Add(new List<int>(path));     // snapshot current path
+        for (int i = start; i < nums.Length; i++)
+        {
+            path.Add(nums[i]);
+            Dfs(i + 1);                      // explore with nums[i] included
+            path.RemoveAt(path.Count - 1);  // backtrack — undo the choice
+        }
+    }
 
-    dfs(0)
-    return result
+    Dfs(0);
+    return result;
+}
 ```
 
 **DFS on a 2D grid — number of islands**
-```python
-def num_islands(grid: list) -> int:
-    rows, cols = len(grid), len(grid[0])
-    count = 0
+```csharp
+public int NumIslands(char[][] grid)
+{
+    int rows = grid.Length, cols = grid[0].Length;
+    int count = 0;
 
-    def dfs(r: int, c: int) -> None:
-        if r < 0 or r >= rows or c < 0 or c >= cols or grid[r][c] != '1':
-            return
-        grid[r][c] = '0'                     # mark visited by mutating grid
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            dfs(r + dr, c + dc)
+    void Dfs(int r, int c)
+    {
+        if (r < 0 || r >= rows || c < 0 || c >= cols || grid[r][c] != '1')
+            return;
+        grid[r][c] = '0';                    // mark visited by mutating grid
+        int[][] directions = new int[][] { new int[] {-1,0}, new int[] {1,0}, new int[] {0,-1}, new int[] {0,1} };
+        foreach (int[] dir in directions)
+            Dfs(r + dir[0], c + dir[1]);
+    }
 
-    for r in range(rows):
-        for c in range(cols):
-            if grid[r][c] == '1':
-                dfs(r, c)
-                count += 1
-    return count
+    for (int r = 0; r < rows; r++)
+    {
+        for (int c = 0; c < cols; c++)
+        {
+            if (grid[r][c] == '1')
+            {
+                Dfs(r, c);
+                count++;
+            }
+        }
+    }
+    return count;
+}
 ```
 
 ---

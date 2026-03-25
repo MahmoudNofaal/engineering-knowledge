@@ -18,74 +18,134 @@ There are two fundamental approaches: **fan-out on write** (push model) and **fa
 
 ## The Code
 
-```python
-# Fan-out on write worker
-# Triggered when a user creates a new post
+```csharp
+// Fan-out on write worker
+// Triggered when a user creates a new post
 
-import redis
-import json
+using StackExchange.Redis;
+using System;
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Threading.Tasks;
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+public class FeedFanOutService
+{
+    private readonly IDatabase _redis;
+    private const int MaxFeedSize = 500;
 
-def fan_out_post(post: dict, follower_ids: list[int], max_feed_size: int = 500):
-    """
-    post = {"post_id": 101, "author_id": 42, "content": "...", "created_at": 1711234567}
-    Writes the post_id into every follower's feed list in Redis.
-    """
-    pipe = r.pipeline()
-    for follower_id in follower_ids:
-        feed_key = f"feed:{follower_id}"
-        # LPUSH = prepend (newest first), LTRIM = cap feed at max_feed_size
-        pipe.lpush(feed_key, post["post_id"])
-        pipe.ltrim(feed_key, 0, max_feed_size - 1)
-    pipe.execute()  # Single round-trip to Redis
+    public async Task FanOutPostAsync(Post post, List<int> followerIds)
+    {
+        // post = { post_id: 101, author_id: 42, content: "...", created_at: 1711234567 }
+        // Writes the post_id into every follower's feed list in Redis.
+        
+        var transaction = _redis.CreateTransaction();
+        foreach (int followerId in followerIds)
+        {
+            string feedKey = $"feed:{followerId}";
+            // LPUSH = prepend (newest first), LTRIM = cap feed at max_feed_size
+            transaction.ListLeftPushAsync(feedKey, post.PostId.ToString());
+            transaction.ListTrimAsync(feedKey, 0, MaxFeedSize - 1);
+        }
+        await transaction.ExecuteAsync();  // Single round-trip to Redis
+    }
+}
+
+public class Post
+{
+    public int PostId { get; set; }
+    public int AuthorId { get; set; }
+    public string Content { get; set; }
+    public long CreatedAt { get; set; }
+}
 ```
 
-```python
-# Feed read — hydrate post IDs from cache into full post objects
+```csharp
+// Feed read — hydrate post IDs from cache into full post objects
 
-def get_feed(user_id: int, page: int = 0, page_size: int = 20) -> list[dict]:
-    feed_key = f"feed:{user_id}"
-    start = page * page_size
-    end = start + page_size - 1
+using StackExchange.Redis;
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Threading.Tasks;
 
-    # Fetch post IDs from user's pre-built feed list
-    post_ids = r.lrange(feed_key, start, end)
-    if not post_ids:
-        return []
+public class FeedReadService
+{
+    private readonly IDatabase _redis;
+    private readonly IPostRepository _db;
 
-    # Batch fetch post details (from cache or DB)
-    posts = []
-    for post_id in post_ids:
-        post_data = r.get(f"post:{post_id.decode()}")
-        if post_data:
-            posts.append(json.loads(post_data))
+    public async Task<List<Post>> GetFeedAsync(int userId, int page = 0, int pageSize = 20)
+    {
+        string feedKey = $"feed:{userId}";
+        int start = page * pageSize;
+        int end = start + pageSize - 1;
 
-    return posts
+        // Fetch post IDs from user's pre-built feed list
+        var postIdValues = _redis.ListRange(feedKey, start, end);
+        if (postIdValues.Length == 0)
+            return new List<Post>();
+
+        // Batch fetch post details (from cache or DB)
+        var posts = new List<Post>();
+        foreach (var idValue in postIdValues)
+        {
+            if (int.TryParse(idValue.ToString(), out int postId))
+            {
+                var postData = _redis.StringGet($"post:{postId}");
+                if (postData.HasValue)
+                    posts.Add(JsonSerializer.Deserialize<Post>(postData.ToString())!);
+            }
+        }
+        return posts;
+    }
+}
 ```
 
-```python
-# Hybrid approach: skip fan-out for celebrities (high follower count)
-# Their posts are injected at read time instead
+```csharp
+// Hybrid approach: skip fan-out for celebrities (high follower count)
+// Their posts are injected at read time instead
 
-CELEBRITY_THRESHOLD = 1_000_000  # followers
+using StackExchange.Redis;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
-def create_post(author_id: int, content: str, db, follower_ids: list[int]):
-    post_id = db.insert_post(author_id, content)
+public class HybridFeedService
+{
+    private const int CelebrityThreshold = 1_000_000;  // followers
+    private readonly IDatabase _redis;
+    private readonly IPostRepository _db;
 
-    follower_count = len(follower_ids)
-    if follower_count < CELEBRITY_THRESHOLD:
-        # Normal user: fan out immediately
-        fan_out_post(
-            {"post_id": post_id, "author_id": author_id},
-            follower_ids
-        )
-    else:
-        # Celebrity: skip fan-out, inject at read time
-        # Just cache the post object; feed reads will pull it on demand
-        pass
+    public async Task<int> CreatePostAsync(
+        int authorId,
+        string content,
+        List<int> followerIds)
+    {
+        int postId = await _db.InsertPostAsync(authorId, content);
 
-    return post_id
+        int followerCount = followerIds.Count;
+        if (followerCount < CelebrityThreshold)
+        {
+            // Normal user: fan out immediately
+            await FanOutPostAsync(
+                new Post { PostId = postId, AuthorId = authorId },
+                followerIds
+            );
+        }
+        else
+        {
+            // Celebrity: skip fan-out, inject at read time
+            // Just cache the post object; feed reads will pull it on demand
+            var post = await _db.GetPostAsync(postId);
+            _redis.StringSet($"post:{postId}", System.Text.Json.JsonSerializer.Serialize(post));
+        }
+
+        return postId;
+    }
+
+    private async Task FanOutPostAsync(Post post, List<int> followerIds)
+    {
+        // Implementation from FanOutPostAsync above
+        await Task.CompletedTask;
+    }
+}
 ```
 
 ```sql

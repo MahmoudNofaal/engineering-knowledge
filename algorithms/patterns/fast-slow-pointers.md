@@ -20,90 +20,129 @@ For kth from end: advance fast by k steps first, then advance both together. Whe
 ## The Code
 
 **Cycle detection — Floyd's algorithm**
-```python
-def has_cycle(head) -> bool:
-    slow = fast = head
-    while fast and fast.next:
-        slow = slow.next
-        fast = fast.next.next
-        if slow is fast:
-            return True
-    return False
+```csharp
+public bool HasCycle(ListNode head)
+{
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.Next != null)
+    {
+        slow = slow.Next;
+        fast = fast.Next.Next;
+        if (slow == fast)
+            return true;
+    }
+    return false;
+}
 ```
 
 **Find cycle entry point — where does the cycle begin?**
-```python
-def detect_cycle(head):
-    slow = fast = head
-    while fast and fast.next:
-        slow = slow.next
-        fast = fast.next.next
-        if slow is fast:
-            break
-    else:
-        return None              # no cycle
+```csharp
+public ListNode DetectCycle(ListNode head)
+{
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.Next != null)
+    {
+        slow = slow.Next;
+        fast = fast.Next.Next;
+        if (slow == fast)
+            break;
+    }
+    if (fast == null || fast.Next == null)
+        return null;             // no cycle
 
-    # reset slow to head; both now advance one step at a time
-    slow = head
-    while slow is not fast:
-        slow = slow.next
-        fast = fast.next
-    return slow                  # meeting point is the cycle entry
+    // reset slow to head; both now advance one step at a time
+    slow = head;
+    while (slow != fast)
+    {
+        slow = slow.Next;
+        fast = fast.Next;
+    }
+    return slow;                 // meeting point is the cycle entry
+}
 ```
 
 **Find middle of linked list**
-```python
-def find_middle(head):
-    slow = fast = head
-    while fast and fast.next:
-        slow = slow.next
-        fast = fast.next.next
-    return slow                  # slow is at the middle (right-middle for even length)
+```csharp
+public ListNode FindMiddle(ListNode head)
+{
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.Next != null)
+    {
+        slow = slow.Next;
+        fast = fast.Next.Next;
+    }
+    return slow;                 // slow is at the middle (right-middle for even length)
+}
 ```
 
 **Kth node from end**
-```python
-def kth_from_end(head, k: int):
-    slow = fast = head
-    for _ in range(k):           # advance fast by k steps
-        if not fast:
-            return None          # k exceeds list length
-        fast = fast.next
-    while fast:
-        slow = slow.next
-        fast = fast.next
-    return slow                  # slow is now k from end
+```csharp
+public ListNode KthFromEnd(ListNode head, int k)
+{
+    ListNode slow = head, fast = head;
+    for (int i = 0; i < k; i++)  // advance fast by k steps
+    {
+        if (fast == null)
+            return null;         // k exceeds list length
+        fast = fast.Next;
+    }
+    while (fast != null)
+    {
+        slow = slow.Next;
+        fast = fast.Next;
+    }
+    return slow;                 // slow is now k from end
+}
 ```
 
 **Happy number — cycle detection on a sequence**
-```python
-def is_happy(n: int) -> bool:
-    def next_num(x: int) -> int:
-        return sum(int(d) ** 2 for d in str(x))
+```csharp
+public bool IsHappy(int n)
+{
+    Func<int, int> NextNum = x =>
+    {
+        int sum = 0;
+        while (x > 0)
+        {
+            int digit = x % 10;
+            sum += digit * digit;
+            x /= 10;
+        }
+        return sum;
+    };
 
-    slow, fast = n, next_num(n)
-    while fast != 1 and slow != fast:
-        slow = next_num(slow)
-        fast = next_num(next_num(fast))
-    return fast == 1             # cycle ends at 1 (happy) or loops (not happy)
+    int slow = n, fast = NextNum(n);
+    while (fast != 1 && slow != fast)
+    {
+        slow = NextNum(slow);
+        fast = NextNum(NextNum(fast));
+    }
+    return fast == 1;            // cycle ends at 1 (happy) or loops (not happy)
+}
 ```
 
 **Find duplicate in array — treat values as pointers (Floyd on array)**
-```python
-def find_duplicate(nums: list) -> int:
-    # Treat nums[i] as a pointer to index nums[i].
-    # A duplicate creates a cycle in this implicit linked list.
-    slow = fast = nums[0]
-    while True:
-        slow = nums[slow]
-        fast = nums[nums[fast]]
-        if slow == fast:
-            break
-    slow = nums[0]
-    while slow != fast:
-        slow = nums[slow]
-        fast = nums[fast]
-    return slow
+```csharp
+public int FindDuplicate(int[] nums)
+{
+    // Treat nums[i] as a pointer to index nums[i].
+    // A duplicate creates a cycle in this implicit linked list.
+    int slow = nums[0], fast = nums[0];
+    while (true)
+    {
+        slow = nums[slow];
+        fast = nums[nums[fast]];
+        if (slow == fast)
+            break;
+    }
+    slow = nums[0];
+    while (slow != fast)
+    {
+        slow = nums[slow];
+        fast = nums[fast];
+    }
+    return slow;
+}
 ```
 
 ---

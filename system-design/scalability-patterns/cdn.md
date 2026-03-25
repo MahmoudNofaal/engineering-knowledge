@@ -15,83 +15,112 @@ A CDN is a geographically distributed caching layer. When a user in Cairo reques
 ---
 
 ## The Code
-```python
-# ── Cache-Control headers — the primary mechanism for CDN caching ─────────
-# The CDN reads these headers to decide what to cache and for how long.
+```csharp
+// ── Cache-Control headers — the primary mechanism for CDN caching ─────────
+// The CDN reads these headers to decide what to cache and for how long.
 
-from flask import Flask, send_file, make_response
+using Microsoft.AspNetCore.Mvc;
+using System.IO;
 
-app = Flask(__name__)
+[ApiController]
+[Route("[controller]")]
+public class CdnController : ControllerBase
+{
+    [HttpGet("/static/logo.png")]
+    public FileResult ServeLogo()
+    {
+        Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        // public     → CDN is allowed to cache this (vs private = user-specific, no CDN cache)
+        // max-age    → cache for 1 year (seconds)
+        // immutable  → browser won't revalidate on reload; use only with content-hashed filenames
+        return PhysicalFile(Path.Combine("assets", "logo.png"), "image/png");
+    }
 
-@app.route("/static/logo.png")
-def serve_logo():
-    response = make_response(send_file("assets/logo.png"))
-    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    # public     → CDN is allowed to cache this (vs private = user-specific, no CDN cache)
-    # max-age    → cache for 1 year (seconds)
-    # immutable  → browser won't revalidate on reload; use only with content-hashed filenames
-    return response
+    [HttpGet("/api/feed")]
+    public IActionResult ServeFeed()
+    {
+        Response.Headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=60";
+        // max-age=30            → serve from cache for 30s
+        // stale-while-revalidate=60 → serve stale for 60s while fetching fresh in background
+        return Ok(new { items = new object[] { } });
+    }
 
-@app.route("/api/feed")
-def serve_feed():
-    response = make_response({"items": []})
-    response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=60"
-    # max-age=30            → serve from cache for 30s
-    # stale-while-revalidate=60 → serve stale for 60s while fetching fresh in background
-    return response
-
-@app.route("/dashboard")
-def serve_dashboard():
-    response = make_response("<html>...</html>")
-    response.headers["Cache-Control"] = "private, no-store"
-    # private  → user-specific; CDN must NOT cache this
-    # no-store → don't cache anywhere, not even the browser
-    return response
+    [HttpGet("/dashboard")]
+    public IActionResult ServeDashboard()
+    {
+        Response.Headers["Cache-Control"] = "private, no-store";
+        // private  → user-specific; CDN must NOT cache this
+        // no-store → don't cache anywhere, not even the browser
+        return Ok("<html>...</html>");
+    }
+}
 ```
-```python
-# ── CDN cache invalidation via API (Cloudflare example) ──────────────────
-# When you deploy new assets, purge the old cached versions.
+```csharp
+// ── CDN cache invalidation via API (Cloudflare example) ──────────────────
+// When you deploy new assets, purge the old cached versions.
 
-import httpx
+using System.Net.Http;
+using System.Text.Json;
 
-def purge_cloudflare_cache(zone_id: str, api_token: str, urls: list[str]) -> dict:
-    response = httpx.post(
-        f"https://api.cloudflare.com/client/v4/zones/{zone_id}/purge_cache",
-        headers={
-            "Authorization": f"Bearer {api_token}",
-            "Content-Type":  "application/json",
-        },
-        json={"files": urls},
-    )
-    return response.json()
+public async Task<Dictionary<string, object>> PurgeCloudflareCache(string zoneId, string apiToken, List<string> urls)
+{
+    using var client = new HttpClient();
+    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiToken}");
+    
+    var content = new StringContent(
+        JsonSerializer.Serialize(new { files = urls }),
+        System.Text.Encoding.UTF8,
+        "application/json"
+    );
+    
+    var response = await client.PostAsync(
+        $"https://api.cloudflare.com/client/v4/zones/{zoneId}/purge_cache",
+        content
+    );
+    
+    var json = await response.Content.ReadAsStringAsync();
+    return JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+}
 
-# Usage: call this as part of your CI/CD deploy pipeline.
-purge_cloudflare_cache(
-    zone_id   = "abc123",
-    api_token = "...",
-    urls      = [
+// Usage: call this as part of your CI/CD deploy pipeline.
+await PurgeCloudflareCache(
+    zoneId: "abc123",
+    apiToken: "...",
+    urls: new List<string>
+    {
         "https://example.com/static/app.js",
         "https://example.com/static/style.css",
-    ]
-)
+    }
+);
 ```
-```python
-# ── Content-hashed filenames — the right way to handle cache busting ──────
-# Instead of purging, give each file version a unique URL.
-# Old URL stays cached (safe). New URL is cache-miss (fresh).
+```csharp
+// ── Content-hashed filenames ─ the right way to handle cache busting ───────────────
+// Instead of purging, give each file version a unique URL.
+// Old URL stays cached (safe). New URL is cache-miss (fresh).
 
-import hashlib, pathlib
+using System.Security.Cryptography;
+using System.Text;
+using System.IO;
 
-def content_hash_filename(filepath: str) -> str:
-    content = pathlib.Path(filepath).read_bytes()
-    digest  = hashlib.md5(content).hexdigest()[:8]
-    stem    = pathlib.Path(filepath).stem
-    suffix  = pathlib.Path(filepath).suffix
-    return f"{stem}.{digest}{suffix}"
+public string ContentHashFilename(string filepath)
+{
+    var fileInfo = new FileInfo(filepath);
+    var content = File.ReadAllBytes(filepath);
+    
+    using var md5 = MD5.Create();
+    var hash = md5.ComputeHash(content);
+    var digest = Convert.ToHexString(hash).Substring(0, 8).ToLower();
+    
+    var nameWithoutExtension = Path.GetFileNameWithoutExtension(filepath);
+    var extension = Path.GetExtension(filepath);
+    
+    return $"{nameWithoutExtension}.{digest}{extension}";
+}
 
-print(content_hash_filename("app.js"))   # → app.a3f2c1b4.js
-# Set max-age=31536000, immutable on this URL.
-# Next deploy produces app.9d1e7f2a.js — a different URL — zero cache invalidation needed.
+var hashedName = ContentHashFilename("app.js");   // → app.a3f2c1b4.js
+
+// Set max-age=31536000, immutable on this URL.
+// Next deploy produces app.9d1e7f2a.js — a different URL — zero cache invalidation needed.
 ```
 
 ---

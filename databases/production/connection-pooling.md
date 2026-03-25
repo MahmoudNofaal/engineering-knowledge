@@ -18,51 +18,73 @@ A connection pool maintains N open connections to the database. When the applica
 
 ## The Code
 
-**SQLAlchemy connection pool (Python — application-side pooling)**
-```python
-from sqlalchemy import create_engine, text
+**SQLAlchemy connection pool (C# — application-side pooling)**
+```csharp
+using Microsoft.EntityFrameworkCore;
+using System.Threading.Tasks;
 
-engine = create_engine(
-    "postgresql://user:pass@localhost:5432/mydb",
-    pool_size=10,          # permanent connections kept open
-    max_overflow=5,        # extra connections allowed under burst (total: 15)
-    pool_timeout=30,       # seconds to wait for a connection before raising
-    pool_recycle=1800,     # recycle connections after 30 min (prevents stale TCP)
-    pool_pre_ping=True,    # test connection health before use (detects dropped connections)
-)
+public class PoolingContext : DbContext
+{
+    public PoolingContext(DbContextOptions<PoolingContext> options) : base(options) { }
+}
 
-# Usage — connection is borrowed and returned automatically
-with engine.connect() as conn:
-    result = conn.execute(text("SELECT COUNT(*) FROM users"))
-    print(result.scalar())
-
-# Check pool status
-print(engine.pool.size())       # pool_size
-print(engine.pool.checkedin())  # connections currently idle in pool
-print(engine.pool.checkedout()) # connections currently in use
+public class Program
+{
+    public static async Task Main()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<PoolingContext>()
+            .UseNpgsql(
+                "Server=localhost;Port=5432;Database=mydb;User Id=user;Password=pass;",
+                options => options
+                    .UseConnectionString("Server=localhost;Port=5432;Database=mydb;User Id=user;Password=pass;")
+            );
+        
+        using (var context = new PoolingContext(optionsBuilder.Options))
+        {
+            // Connection is automatically pooled and reused
+            var count = await context.Database.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM users"
+            );
+            System.Console.WriteLine($"User count: {count}");
+        }
+        
+        // Connection returned to pool when DbContext disposed
+    }
+}
 ```
 
-**asyncpg with connection pool (async Python)**
-```python
-import asyncpg
-import asyncio
+**Npgsql with connection pool (async C#)**
+```csharp
+using Npgsql;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
-async def main():
-    pool = await asyncpg.create_pool(
-        dsn="postgresql://user:pass@localhost:5432/mydb",
-        min_size=5,       # minimum warm connections
-        max_size=20,      # maximum connections
-        max_inactive_connection_lifetime=300.0,  # recycle idle connections after 5 min
-        command_timeout=60    # query timeout in seconds
-    )
+public class AsyncPoolExample
+{
+    public static async Task Main()
+    {
+        // Npgsql has built-in connection pooling
+        var connString = "Server=localhost;Port=5432;Database=mydb;User Id=user;Password=pass;" +
+                        "Maximum Pool Size=20;Minimum Pool Size=5;Connection Idle Lifetime=300;";
 
-    # Acquire and release automatically
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id, name FROM users LIMIT 10")
-
-    await pool.close()
-
-asyncio.run(main())
+        using (var conn = new NpgsqlConnection(connString))
+        {
+            await conn.OpenAsync();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT id, name FROM users LIMIT 10";
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    var rows = new List<(int id, string name)>();
+                    while (await reader.ReadAsync())
+                        rows.Add((reader.GetInt32(0), reader.GetString(1)));
+                }
+            }
+        }
+        // Connection automatically returned to pool when disposed
+    }
+}
 ```
 
 **PgBouncer — server-side connection pooler for Postgres**
@@ -140,52 +162,68 @@ try (Connection conn = ds.getConnection()) {
 ```
 
 **Right-sizing pool size — the formula**
-```python
-# Postgres recommendation: pool_size = num_cores * 2 + num_spindle_disks
-# For a 4-core server with SSD: pool_size = 4 * 2 + 1 = 9 (~10)
-# More connections does not mean more throughput — beyond saturation,
-# connections compete for CPU and slow each other down
+```csharp
+// Postgres recommendation: pool_size = num_cores * 2 + num_spindle_disks
+// For a 4-core server with SSD: pool_size = 4 * 2 + 1 = 9 (~10)
+// More connections does not mean more throughput — beyond saturation,
+// connections compete for CPU and slow each other down
 
-# Total connection budget across all instances:
-# max_connections (Postgres) = sum(pool_size * num_app_instances) + admin headroom
+// Total connection budget across all instances:
+// max_connections (Postgres) = sum(pool_size * num_app_instances) + admin headroom
 
-# Example:
-# max_connections = 100
-# admin headroom  = 5   (for psql, monitoring, migrations)
-# available       = 95
-# app instances   = 5
-# pool_size       = 95 / 5 = 19  → set to 15 with overflow to 19
+// Example:
+int maxConnections = 100;        // Postgres max_connections
+int adminHeadroom = 5;           // for psql, monitoring, migrations
+int available = maxConnections - adminHeadroom;  // 95
+int appInstances = 5;
+int poolSize = available / appInstances;  // 95 / 5 = 19
+// Set to 15 with overflow to 19
 
-# With PgBouncer:
-# PgBouncer → Postgres: 20 connections (server pool)
-# App → PgBouncer:      500 connections (client pool)
-# Postgres sees 20 connections regardless of app instance count
+// With PgBouncer as proxy:
+// PgBouncer → Postgres: 20 connections (server pool)
+// App → PgBouncer:      500 connections (client pool)
+// Postgres sees only 20 connections regardless of app instance count
 ```
 
 **Detecting pool exhaustion**
-```python
-from sqlalchemy import event
-from sqlalchemy.pool import Pool
-import logging
+```csharp
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using System;
 
-logger = logging.getLogger(__name__)
+public class PoolMonitoring
+{
+    public static void ConfigureLogging(DbContextOptionsBuilder options)
+    {
+        var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+        options.UseLoggerFactory(loggerFactory);
+        options.EnableSensitiveDataLogging();
+    }
 
-@event.listens_for(Pool, "connect")
-def on_connect(dbapi_connection, connection_record):
-    logger.info("New DB connection established")
+    // Monitor these metrics in production:
+    // - Connection pool exhaustion warnings in logs
+    // - Database connection count via: SELECT count(*) FROM pg_stat_activity;
+    // - Connection wait time: Application Insights or custom instrumentation
+    // - Pool overflow events: Application Insights custom events
+}
 
-@event.listens_for(Pool, "checkout")
-def on_checkout(dbapi_connection, connection_record, connection_proxy):
-    logger.debug("Connection borrowed from pool")
+// Example instrumentation:
+public class PoolExhaustionDetector
+{
+    private readonly NpgsqlDataSource _dataSource;
+    private readonly ILogger _logger;
 
-@event.listens_for(Pool, "checkin")
-def on_checkin(dbapi_connection, connection_record):
-    logger.debug("Connection returned to pool")
-
-# Monitor these metrics in production:
-# - pool checkout wait time (rising = pool too small or queries too slow)
-# - pool overflow count (regular overflow = pool undersized)
-# - connection errors (pool exhausted = max_overflow hit)
+    public async Task CheckPoolHealthAsync()
+    {
+        using (var conn = _dataSource.OpenConnection())
+        {
+            var stats = await conn.ExecuteScalarAsync(
+                "SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction';"
+            );
+            _logger.LogWarning($"Idle connections: {stats}");
+        }
+    }
+}
 ```
 
 ---

@@ -19,90 +19,124 @@ NoSQL doesn't mean "no schema" — it means "not organized around tables and joi
 ## The Code
 
 **Key-Value — Redis**
-```python
-import redis
+```csharp
+using StackExchange.Redis;
 
-r = redis.Redis()
+var redis = ConnectionMultiplexer.Connect("localhost:6379");
+var db = redis.GetDatabase();
 
-# O(1) get/set — the entire value is opaque to the DB
-r.set("session:abc123", '{"user_id": 42, "role": "admin"}', ex=3600)
-val = r.get("session:abc123")
+// O(1) get/set — the entire value is opaque to the DB
+db.StringSet("session:abc123", "{\"user_id\": 42, \"role\": \"admin\"}", TimeSpan.FromSeconds(3600));
+var val = db.StringGet("session:abc123");
 
-# Redis also supports typed values: lists, sets, sorted sets, hashes
-r.zadd("leaderboard", {"alice": 1500, "bob": 1200})  # sorted set
-top3 = r.zrevrange("leaderboard", 0, 2, withscores=True)
+// Redis also supports typed values: lists, sets, sorted sets, hashes
+db.SortedSetAdd("leaderboard", new[] 
+{
+    new SortedSetEntry("alice", 1500),
+    new SortedSetEntry("bob", 1200)
+});
+var top3 = db.SortedSetRangeByRankWithScores("leaderboard", 0, 2, Order.Descending);
 ```
 
 **Document — MongoDB**
-```python
-from pymongo import MongoClient
+```csharp
+using MongoDB.Driver;
+using MongoDB.Bson;
 
-db = MongoClient()["shop"]
+var client = new MongoClient();
+var db = client.GetDatabase("shop");
+var collection = db.GetCollection<BsonDocument>("products");
 
-# Documents are schema-free — fields vary per document
-db.products.insert_many([
-    {"name": "Laptop", "brand": "Dell", "specs": {"ram": 16, "ssd": 512}},
-    {"name": "Phone",  "brand": "Apple", "color": "black"},  # different shape
-])
+// Documents are schema-free — fields vary per document
+var docs = new[]
+{
+    new BsonDocument
+    {
+        { "name", "Laptop" },
+        { "brand", "Dell" },
+        { "specs", new BsonDocument { { "ram", 16 }, { "ssd", 512 } } }
+    },
+    new BsonDocument
+    {
+        { "name", "Phone" },
+        { "brand", "Apple" },
+        { "color", "black" }  // different shape
+    }
+};
+await collection.InsertManyAsync(docs);
 
-# Query on nested field
-db.products.find({"specs.ram": {"$gte": 16}})
+// Query on nested field
+var filter = Builders<BsonDocument>.Filter.Gte("specs.ram", 16);
+var result = await collection.Find(filter).ToListAsync();
 
-# Index on a nested field
-db.products.create_index("specs.ram")
+// Index on a nested field
+await collection.Indexes.CreateOneAsync(
+    new CreateIndexModel<BsonDocument>(Builders<BsonDocument>.IndexKeys.Ascending("specs.ram"))
+);
 ```
 
 **Column-Family — Apache Cassandra**
-```python
-from cassandra.cluster import Cluster
+```csharp
+using Cassandra;
 
-session = Cluster().connect("analytics")
+var cluster = Cluster.Builder().AddContactPoint("localhost").Build();
+var session = cluster.Connect("analytics");
 
-# Schema defined upfront, but rows are sparse — missing columns cost nothing
-session.execute("""
+// Schema defined upfront, but rows are sparse — missing columns cost nothing
+await session.ExecuteAsync(new SimpleStatement(@"
     CREATE TABLE IF NOT EXISTS events (
         user_id  UUID,
         event_ts TIMESTAMP,
         type     TEXT,
         payload  TEXT,
-        PRIMARY KEY (user_id, event_ts)  -- partition key + clustering key
+        PRIMARY KEY (user_id, event_ts)
     )
-""")
+"));
 
-# Writes are extremely fast — appended to commit log, no read-before-write
-session.execute("""
-    INSERT INTO events (user_id, event_ts, type, payload)
-    VALUES (%s, toTimestamp(now()), %s, %s)
-""", (user_id, "click", '{"page": "/home"}'))
+// Writes are extremely fast — appended to commit log, no read-before-write
+await session.ExecuteAsync(new SimpleStatement(
+    "INSERT INTO events (user_id, event_ts, type, payload) VALUES (?, now(), ?, ?)",
+    new object[] { userId, "click", "{\"page\": \"/home\"}" }
+));
 
-# Queries MUST align with the primary key — no arbitrary WHERE clauses
-session.execute("""
-    SELECT * FROM events
-    WHERE user_id = %s AND event_ts > %s
-""", (user_id, since))
+// Queries MUST align with the primary key — no arbitrary WHERE clauses
+var result = await session.ExecuteAsync(new SimpleStatement(
+    "SELECT * FROM events WHERE user_id = ? AND event_ts > ?",
+    new object[] { userId, DateTimeOffset.UtcNow.AddDays(-7) }
+));
 ```
 
 **Graph — Neo4j**
-```python
-from neo4j import GraphDatabase
+```csharp
+using Neo4j.Driver;
 
-driver = GraphDatabase.driver("bolt://localhost:7687")
+var driver = GraphDatabase.Driver("bolt://localhost:7687", AuthTokens.Basic("neo4j", "password"));
 
-with driver.session() as session:
-    # Nodes and relationships are first-class — not foreign keys
-    session.run("""
-        MERGE (a:User {id: $uid})
-        MERGE (b:Product {id: $pid})
-        MERGE (a)-[:PURCHASED {at: datetime()}]->(b)
-    """, uid="u1", pid="p42")
+await using var session = driver.AsyncSession();
 
-    # Traverse relationships — no joins, no N+1
-    result = session.run("""
-        MATCH (u:User {id: $uid})-[:PURCHASED]->(p:Product)
-              <-[:PURCHASED]-(other:User)
-        RETURN DISTINCT other.id AS similar_user
-        LIMIT 10
-    """, uid="u1")
+// Nodes and relationships are first-class — not foreign keys
+await session.ExecuteWriteAsync(async tx =>
+{
+    await tx.RunAsync(
+        @"MERGE (a:User {id: $uid})
+          MERGE (b:Product {id: $pid})
+          MERGE (a)-[:PURCHASED {at: datetime()}]->(b)",
+        new { uid = "u1", pid = "p42" }
+    );
+});
+
+// Traverse relationships — no joins, no N+1
+var result = await session.ExecuteReadAsync(async tx =>
+{
+    var records = await tx.RunAsync(
+        @"MATCH (u:User {id: $uid})-[:PURCHASED]->(p:Product)
+               <-[:PURCHASED]-(other:User)
+          RETURN DISTINCT other.id AS similar_user
+          LIMIT 10",
+        new { uid = "u1" }
+    ).ToListAsync();
+    return records.Select(r => r["similar_user"].As<string>()).ToList();
+});
 ```
 
 ---

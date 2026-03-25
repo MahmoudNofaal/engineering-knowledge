@@ -25,103 +25,146 @@ DP thinking process:
 ## The Code
 
 **Fibonacci — memoization vs tabulation**
-```python
-# Top-down: memoization
-from functools import lru_cache
+```csharp
+// Top-down: memoization
+private Dictionary<int, long> memo = new Dictionary<int, long>();
 
-@lru_cache(maxsize=None)
-def fib_memo(n: int) -> int:
-    if n <= 1:
-        return n
-    return fib_memo(n - 1) + fib_memo(n - 2)
+public long FibMemo(int n)
+{
+    if (n <= 1)
+        return n;
+    if (memo.ContainsKey(n))
+        return memo[n];
+    memo[n] = FibMemo(n - 1) + FibMemo(n - 2);
+    return memo[n];
+}
 
-# Bottom-up: tabulation
-def fib_tab(n: int) -> int:
-    if n <= 1:
-        return n
-    dp = [0] * (n + 1)
-    dp[1] = 1
-    for i in range(2, n + 1):
-        dp[i] = dp[i-1] + dp[i-2]
-    return dp[n]
+// Bottom-up: tabulation
+public long FibTab(int n)
+{
+    if (n <= 1)
+        return n;
+    var dp = new long[n + 1];
+    dp[1] = 1;
+    for (int i = 2; i <= n; i++)
+        dp[i] = dp[i - 1] + dp[i - 2];
+    return dp[n];
+}
 
-# Space-optimized: only need last two values
-def fib_opt(n: int) -> int:
-    if n <= 1:
-        return n
-    a, b = 0, 1
-    for _ in range(2, n + 1):
-        a, b = b, a + b
-    return b
+// Space-optimized: only need last two values
+public long FibOpt(int n)
+{
+    if (n <= 1)
+        return n;
+    long a = 0, b = 1;
+    for (int i = 2; i <= n; i++)
+    {
+        long temp = a + b;
+        a = b;
+        b = temp;
+    }
+    return b;
+}
 ```
 
 **Longest increasing subsequence — O(n²) and O(n log n)**
-```python
-# O(n²) DP
-def lis(nums: list) -> int:
-    # dp[i] = length of LIS ending at index i
-    dp = [1] * len(nums)
-    for i in range(1, len(nums)):
-        for j in range(i):
-            if nums[j] < nums[i]:
-                dp[i] = max(dp[i], dp[j] + 1)
-    return max(dp)
+```csharp
+// O(n²) DP
+public int LIS(int[] nums)
+{
+    // dp[i] = length of LIS ending at index i
+    var dp = new int[nums.Length];
+    for (int i = 0; i < nums.Length; i++)
+        dp[i] = 1;
+    for (int i = 1; i < nums.Length; i++)
+    {
+        for (int j = 0; j < i; j++)
+        {
+            if (nums[j] < nums[i])
+                dp[i] = Math.Max(dp[i], dp[j] + 1);
+        }
+    }
+    return dp.Max();
+}
 
-# O(n log n) with patience sorting
-import bisect
-
-def lis_fast(nums: list) -> int:
-    tails = []    # tails[i] = smallest tail of any IS of length i+1
-    for num in nums:
-        pos = bisect.bisect_left(tails, num)
-        if pos == len(tails):
-            tails.append(num)
-        else:
-            tails[pos] = num    # replace to keep tails as small as possible
-    return len(tails)
+// O(n log n) with patience sorting
+public int LISFast(int[] nums)
+{
+    var tails = new List<int>();  // tails[i] = smallest tail of any IS of length i+1
+    foreach (int num in nums)
+    {
+        int pos = tails.BinarySearch(num);
+        if (pos < 0) pos = ~pos;  // BinarySearch returns negative index if not found
+        if (pos == tails.Count)
+            tails.Add(num);
+        else
+            tails[pos] = num;  // replace to keep tails as small as possible
+    }
+    return tails.Count;
+}
 ```
 
 **0/1 Knapsack**
-```python
-def knapsack(weights: list, values: list, capacity: int) -> int:
-    n = len(weights)
-    # dp[i][w] = max value using first i items with capacity w
-    dp = [[0] * (capacity + 1) for _ in range(n + 1)]
-    for i in range(1, n + 1):
-        for w in range(capacity + 1):
-            dp[i][w] = dp[i-1][w]              # don't take item i
-            if weights[i-1] <= w:
-                dp[i][w] = max(dp[i][w],
-                               dp[i-1][w - weights[i-1]] + values[i-1])  # take it
-    return dp[n][capacity]
+```csharp
+public int Knapsack(int[] weights, int[] values, int capacity)
+{
+    int n = weights.Length;
+    // dp[i,w] = max value using first i items with capacity w
+    var dp = new int[n + 1, capacity + 1];
+    for (int i = 1; i <= n; i++)
+    {
+        for (int w = 0; w <= capacity; w++)
+        {
+            dp[i, w] = dp[i - 1, w];  // don't take item i
+            if (weights[i - 1] <= w)
+                dp[i, w] = Math.Max(dp[i, w],
+                                    dp[i - 1, w - weights[i - 1]] + values[i - 1]);  // take it
+        }
+    }
+    return dp[n, capacity];
+}
 ```
 
 **Longest common subsequence**
-```python
-def lcs(s1: str, s2: str) -> int:
-    m, n = len(s1), len(s2)
-    # dp[i][j] = LCS length of s1[:i] and s2[:j]
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            if s1[i-1] == s2[j-1]:
-                dp[i][j] = dp[i-1][j-1] + 1
-            else:
-                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
-    return dp[m][n]
+```csharp
+public int LCS(string s1, string s2)
+{
+    int m = s1.Length, n = s2.Length;
+    // dp[i,j] = LCS length of s1[0..i) and s2[0..j)
+    var dp = new int[m + 1, n + 1];
+    for (int i = 1; i <= m; i++)
+    {
+        for (int j = 1; j <= n; j++)
+        {
+            if (s1[i - 1] == s2[j - 1])
+                dp[i, j] = dp[i - 1, j - 1] + 1;
+            else
+                dp[i, j] = Math.Max(dp[i - 1, j], dp[i, j - 1]);
+        }
+    }
+    return dp[m, n];
+}
 ```
 
 **Coin change — minimum coins**
-```python
-def coin_change(coins: list, amount: int) -> int:
-    # dp[i] = minimum coins to make amount i
-    dp = [float('inf')] * (amount + 1)
-    dp[0] = 0
-    for i in range(1, amount + 1):
-        for coin in coins:
-            if coin <= i:
-                dp[i] = min(dp[i], dp[i - coin] + 1)
-    return dp[amount] if dp[amount] != float('inf') else -1
+```csharp
+public int CoinChange(int[] coins, int amount)
+{
+    // dp[i] = minimum coins to make amount i
+    var dp = new int[amount + 1];
+    for (int i = 0; i <= amount; i++)
+        dp[i] = int.MaxValue;
+    dp[0] = 0;
+    for (int i = 1; i <= amount; i++)
+    {
+        foreach (int coin in coins)
+        {
+            if (coin <= i && dp[i - coin] != int.MaxValue)
+                dp[i] = Math.Min(dp[i], dp[i - coin] + 1);
+        }
+    }
+    return dp[amount] != int.MaxValue ? dp[amount] : -1;
+}
 ```
 
 ---

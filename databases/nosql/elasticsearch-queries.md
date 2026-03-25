@@ -19,304 +19,296 @@ Every query in Elasticsearch is either a leaf query (matches against a field) or
 ## The Code
 
 **The Bool query — the backbone of everything**
-```python
-from elasticsearch import Elasticsearch
-es = Elasticsearch("http://localhost:9200")
+```csharp
+using Elasticsearch.Net;
+using Nest;
 
-# Bool is how you compose all other queries
-# Each clause type has different scoring and caching behavior
-result = es.search(index="articles", body={
-    "query": {
-        "bool": {
-            "must":     [],    # must match + contributes to score
-            "filter":   [],    # must match + NO score + cached (fast)
-            "should":   [],    # optional + boosts score if matches
-            "must_not": []     # must not match + NO score + cached
-        }
-    }
-})
+var client = new ElasticClient(new ConnectionSettings(
+    new Uri("http://localhost:9200")
+));
+
+// Bool is how you compose all other queries
+// Each clause type has different scoring and caching behavior
+var result = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Bool(b => b
+        .Must()      // must match + contributes to score
+        .Filter()    // must match + NO score + cached (fast)
+        .Should()    // optional + boosts score if matches
+        .MustNot()   // must not match + NO score + cached
+    ))
+);
 ```
 
 **Leaf queries — text fields**
-```python
-# match: standard full-text, analyzed
-# Use for: user-typed search input on text fields
-es.search(index="articles", body={
-    "query": {
-        "match": {
-            "title": {
-                "query":    "database indexing",
-                "operator": "and",          # default is "or" — use "and" for precision
-                "fuzziness": "AUTO"         # optional typo tolerance
-            }
-        }
-    }
-})
+```csharp
+// match: standard full-text, analyzed
+// Use for: user-typed search input on text fields
+var result = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Match(m => m
+        .Field(f => f.Title)
+        .Query("database indexing")
+        .Operator(Operator.And)     // default is "or" — use "and" for precision
+        .Fuzziness(Fuzziness.Auto)  // optional typo tolerance
+    ))
+);
 
-# match_phrase: terms must appear in order, adjacent
-# Use for: exact phrase search
-es.search(index="articles", body={
-    "query": {
-        "match_phrase": {
-            "body": {
-                "query": "inverted index",
-                "slop":  2    # allow 2 words between terms and still match
-            }
-        }
-    }
-})
+// match_phrase: terms must appear in order, adjacent
+// Use for: exact phrase search
+var phraseResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.MatchPhrase(mp => mp
+        .Field(f => f.Body)
+        .Query("inverted index")
+        .Slop(2)  // allow 2 words between terms and still match
+    ))
+);
 
-# match_phrase_prefix: last term is a prefix — autocomplete on body text
-# Use for: search-as-you-type on text fields (completion suggester is better for titles)
-es.search(index="articles", body={
-    "query": {
-        "match_phrase_prefix": {
-            "title": {
-                "query":             "elasticsearch qu",
-                "max_expansions":    20   # limit how many prefix variations to try
-            }
-        }
-    }
-})
+// match_phrase_prefix: last term is a prefix — autocomplete on body text
+// Use for: search-as-you-type on text fields (completion suggester is better for titles)
+var prefixResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.MatchPhrasePrefix(mpp => mpp
+        .Field(f => f.Title)
+        .Query("elasticsearch qu")
+        .MaxExpansions(20)  // limit how many prefix variations to try
+    ))
+);
 
-# multi_match: same query across multiple fields
-# type controls how scores from multiple fields are combined
-es.search(index="articles", body={
-    "query": {
-        "multi_match": {
-            "query":    "sharding replication",
-            "fields":   ["title^3", "body", "tags^2"],  # ^ = boost multiplier
-            "type":     "best_fields",   # score = best single field
-            # "most_fields"  — sum all field scores (rewards multiple field matches)
-            # "cross_fields" — treat all fields as one big field (good for name search)
-            # "phrase"       — match_phrase across fields
-        }
-    }
-})
+// multi_match: same query across multiple fields
+// type controls how scores from multiple fields are combined
+var multiResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.MultiMatch(mm => mm
+        .Query("sharding replication")
+        .Fields(f => f
+            .Field(f => f.Title, boost: 3)
+            .Field(f => f.Body)
+            .Field(f => f.Tags, boost: 2)
+        )
+        .Type(TextQueryType.BestFields)  // score = best single field
+        // TextQueryType.MostFields      — sum all field scores (rewards multiple field matches)
+        // TextQueryType.CrossFields     — treat all fields as one big field (good for name search)
+        // TextQueryType.Phrase          — match_phrase across fields
+    ))
+);
 ```
 
 **Leaf queries — keyword/exact fields**
-```python
-# term: exact match on keyword field — case-sensitive
-# Use for: filtering on IDs, statuses, enum values
-es.search(index="articles", body={
-    "query": {
-        "term": {"status": {"value": "published"}}
-    }
-})
+```csharp
+// term: exact match on keyword field — case-sensitive
+// Use for: filtering on IDs, statuses, enum values
+var termResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Term(t => t
+        .Field(f => f.Status)
+        .Value("published")
+    ))
+);
 
-# terms: match any value in a list
-es.search(index="articles", body={
-    "query": {
-        "terms": {"author": ["ali", "sara", "john"]}
-    }
-})
+// terms: match any value in a list
+var termsResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Terms(t => t
+        .Field(f => f.Author)
+        .Terms(new[] { "ali", "sara", "john" })
+    ))
+);
 
-# range: numeric, date, keyword ranges
-es.search(index="articles", body={
-    "query": {
-        "range": {
-            "published": {
-                "gte": "2025-01-01",
-                "lte": "2025-12-31",
-                "format": "yyyy-MM-dd"
-            }
-        }
-    }
-})
+// range: numeric, date, keyword ranges
+var rangeResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Range(r => r
+        .Field(f => f.Published)
+        .GreaterThanOrEquals("2025-01-01")
+        .LessThanOrEquals("2025-12-31")
+    ))
+);
 
-# exists: field is present and not null
-es.search(index="articles", body={
-    "query": {"exists": {"field": "thumbnail_url"}}
-})
+// exists: field is present and not null
+var existsResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Exists(e => e.Field(f => f.ThumbnailUrl)))
+);
 
-# ids: fetch specific documents by ID — faster than term query on _id
-es.search(index="articles", body={
-    "query": {"ids": {"values": ["1", "2", "3"]}}
-})
+// ids: fetch specific documents by ID — faster than term query on _id
+var idsResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Ids(i => i.Values(new[] { "1", "2", "3" })))
+);
 ```
 
 **Fuzzy and wildcard**
-```python
-# fuzzy: handles typos via edit distance
-# Use for: single-term search where user input may be misspelled
-es.search(index="articles", body={
-    "query": {
-        "fuzzy": {
-            "title": {
-                "value":       "elasticsearh",   # typo
-                "fuzziness":   2,                # max edit distance
-                "prefix_length": 2              # first N chars must match exactly
-                                                # prevents massive term expansion
-            }
-        }
-    }
-})
+```csharp
+// fuzzy: handles typos via edit distance
+// Use for: single-term search where user input may be misspelled
+var fuzzyResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Fuzzy(f => f
+        .Field(f => f.Title)
+        .Value("elasticsearh")  // typo
+        .Fuzziness(Fuzziness.EditDistance(2))  // max edit distance
+        .PrefixLength(2)  // first N chars must match exactly — prevents massive term expansion
+    ))
+);
 
-# wildcard: pattern matching — expensive, avoid leading wildcards
-# Use for: controlled internal queries, never raw user input
-es.search(index="articles", body={
-    "query": {
-        "wildcard": {
-            "author": {
-                "value": "a*",       # fine — no leading wildcard
-                # "value": "*li"     # bad — scans entire term dictionary
-            }
-        }
-    }
-})
+// wildcard: pattern matching — expensive, avoid leading wildcards
+// Use for: controlled internal queries, never raw user input
+var wildcardResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Wildcard(w => w
+        .Field(f => f.Author)
+        .Value("a*")  // fine — no leading wildcard
+        // .Value("*li")  // bad — scans entire term dictionary
+    ))
+);
 
-# regexp: regex on keyword field — use sparingly
-es.search(index="articles", body={
-    "query": {
-        "regexp": {
-            "tags": {
-                "value": "data.*",
-                "flags": "ALL"
-            }
-        }
-    }
-})
+// regexp: regex on keyword field — use sparingly
+var regexResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Regexp(r => r
+        .Field(f => f.Tags)
+        .Value("data.*")
+    ))
+);
 ```
 
 **Compound queries — combining and controlling scores**
-```python
-# Full production search query — the real pattern
-result = es.search(index="articles", body={
-    "query": {
-        "bool": {
-            # Full-text relevance — scored
-            "must": [
-                {
-                    "multi_match": {
-                        "query":  "database sharding",
-                        "fields": ["title^3", "body"],
-                        "type":   "best_fields"
-                    }
-                }
-            ],
-            # Hard constraints — not scored, cached
-            "filter": [
-                {"term":  {"status": "published"}},
-                {"range": {"published": {"gte": "2024-01-01"}}},
-                {"terms": {"tags": ["databases", "systems"]}}
-            ],
-            # Soft signals — boost score but not required
-            "should": [
-                {"term":  {"is_featured": True}},
-                {"range": {"view_count": {"gte": 1000}}}
-            ],
-            "minimum_should_match": 0,   # 0 = should clauses optional
-            "must_not": [
-                {"term": {"status": "draft"}}
-            ]
-        }
-    }
-})
+```csharp
+// Full production search query — the real pattern
+var result = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Bool(b => b
+        // Full-text relevance — scored
+        .Must(m => m.MultiMatch(mm => mm
+            .Query("database sharding")
+            .Fields(f => f
+                .Field(fa => fa.Title, boost: 3)
+                .Field(fa => fa.Body)
+            )
+            .Type(TextQueryType.BestFields)
+        ))
+        // Hard constraints — not scored, cached
+        .Filter(f => f.Term(t => t.Status, "published"))
+        .Filter(f => f.DateRange(dr => dr
+            .Field(fa => fa.Published)
+            .GreaterThanOrEquals("2024-01-01")
+        ))
+        .Filter(f => f.Terms(t => t.Tags, new[] { "databases", "systems" }))
+        // Soft signals — boost score but not required
+        .Should(s => s.Term(t => t.IsFeatured, true))
+        .Should(s => s.Range(r => r
+            .Field(fa => fa.ViewCount)
+            .GreaterThanOrEquals(1000)
+        ))
+        .MinimumShouldMatch(0)  // 0 = should clauses optional
+        .MustNot(mn => mn.Term(t => t.Status, "draft"))
+    ))
+);
 
-# function_score — inject custom signals into relevance score
-# Use for: recency boost, popularity boost, personalization
-es.search(index="articles", body={
-    "query": {
-        "function_score": {
-            "query": {
-                "match": {"body": "distributed systems"}
-            },
-            "functions": [
-                # Decay function — score drops as date moves away from now
-                {
-                    "gauss": {
-                        "published": {
-                            "origin": "now",
-                            "scale":  "30d",    # half-score at 30 days old
-                            "decay":  0.5
-                        }
-                    }
-                },
-                # Field value factor — multiply score by view_count signal
-                {
-                    "field_value_factor": {
-                        "field":    "view_count",
-                        "factor":   0.1,
-                        "modifier": "log1p",    # log(1 + view_count) — dampens outliers
-                        "missing":  1
-                    }
-                }
-            ],
-            "score_mode":  "sum",      # how to combine function scores
-            "boost_mode":  "multiply"  # how to combine with query score
-        }
-    }
-})
+// function_score — inject custom signals into relevance score
+// Use for: recency boost, popularity boost, personalization
+var functionResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.FunctionScore(fs => fs
+        .Query(fq => fq.Match(m => m
+            .Field(f => f.Body)
+            .Query("distributed systems")
+        ))
+        .Functions(fn => fn
+            // Decay function — score drops as date moves away from now
+            .Gauss(g => g
+                .Field(f => f.Published)
+                .Origin("now")
+                .Scale("30d")     // half-score at 30 days old
+                .Decay(0.5)
+            )
+            // Field value factor — multiply score by view_count signal
+            .FieldValueFactor(fvf => fvf
+                .Field(f => f.ViewCount)
+                .Factor(0.1)
+                .Modifier(FieldValueFactorModifier.Log1p)    // log(1 + view_count) — dampens outliers
+                .Missing(1)
+            )
+        )
+        .ScoreMode(FunctionScoreMode.Sum)      // how to combine function scores
+        .BoostMode(FunctionBoostMode.Multiply) // how to combine with query score
+    ))
+);
 ```
 
-**Nested queries — objects in arrays**
-```python
-# Without nested mapping, array objects are flattened and lose correlation
-# Document: {reviews: [{user: "ali", score: 5}, {user: "sara", score: 1}]}
-# Without nested: query for user=ali AND score=1 incorrectly matches
+**Function score and nested queries**
+```csharp
+// function_score — inject custom signals into relevance score
+// Use for: recency boost, popularity boost, personalization
+var functionResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.FunctionScore(fs => fs
+        .Query(fq => fq.Match(m => m.Field(f => f.Body).Query("distributed systems")))
+        .Functions(f => f
+            // Decay function — score drops as date moves away from now
+            .GaussDate(g => g
+                .Field(f => f.Published)
+                .Origin("now")
+                .Scale("30d")  // half-score at 30 days old
+                .Decay(0.5)
+            )
+        )
+        .Functions(f => f
+            // Field value factor — multiply score by view_count signal
+            .FieldValueFactor(fvf => fvf
+                .Field(f => f.ViewCount)
+                .Factor(0.1)
+                .Modifier(FieldValueFactorModifier.Log1p)  // log(1 + view_count) — dampens outliers
+                .Missing(1)
+            )
+        )
+        .ScoreMode(FunctionScoreMode.Sum)   // how to combine function scores
+        .BoostMode(FunctionBoostMode.Multiply)  // how to combine with query score
+    ))
+);
 
-# Mapping — declare field as nested
-es.indices.put_mapping(index="products", body={
-    "properties": {
-        "reviews": {
-            "type": "nested",
-            "properties": {
-                "user":  {"type": "keyword"},
-                "score": {"type": "integer"},
-                "text":  {"type": "text"}
-            }
-        }
-    }
-})
-
-# Query — nested context preserves object correlation
-es.search(index="products", body={
-    "query": {
-        "nested": {
-            "path": "reviews",
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term":  {"reviews.user":  "ali"}},
-                        {"range": {"reviews.score": {"gte": 4}}}
-                    ]
-                }
-            },
-            "score_mode": "max"   # how nested hits contribute to parent score
-        }
-    }
-})
+// Nested queries — objects in arrays
+// Without nested mapping, array objects are flattened and lose correlation
+// Mapping — declare field as nested (done during index setup)
+// Query — nested context preserves object correlation
+var nestedResult = client.Search<Product>(s => s
+    .Index("products")
+    .Query(q => q.Nested(n => n
+        .Path(p => p.Reviews)
+        .Query(nq => nq.Bool(b => b
+            .Must(m => m.Term(t => t.Field(f => f.Reviews.First().User).Value("ali")))
+            .Must(m => m.Range(r => r.Field(f => f.Reviews.First().Score).GreaterThanOrEquals(4)))
+        ))
+        .ScoreMode(NestedScoreMode.Max)  // how nested hits contribute to parent score
+    ))
+);
 ```
 
-**Highlighting, explain, and debugging**
-```python
-# highlight — show matched terms in context
-es.search(index="articles", body={
-    "query":     {"match": {"body": "inverted index"}},
-    "highlight": {
-        "fields": {
-            "body": {
-                "fragment_size":       200,
-                "number_of_fragments": 2,
-                "pre_tags":  ["<mark>"],
-                "post_tags": ["</mark>"]
-            }
-        }
-    }
-})
+**Highlighting and debugging**
+```csharp
+// highlight — show matched terms in context
+var highlightResult = client.Search<Article>(s => s
+    .Index("articles")
+    .Query(q => q.Match(m => m.Field(f => f.Body).Query("inverted index")))
+    .Highlight(h => h
+        .Fields(f => f
+            .Field(f => f.Body)
+            .FragmentSize(200)
+            .NumberOfFragments(2)
+            .PreTags("<mark>")
+            .PostTags("</mark>")
+        )
+    )
+);
 
-# explain — show why a document got its score
-es.explain(index="articles", id="1", body={
-    "query": {"match": {"title": "postgres"}}
-})
-# Returns: idf, tf, field length norm — the three BM25 components
-
-# profile — show which query parts took how long
-es.search(index="articles", body={
-    "profile": True,
-    "query":   {"match": {"title": "postgres"}}
-})
+// explain — show why a document got its score
+var explainResult = client.Explain<Article>(new DocumentPath<Article>("1"), e => e
+    .Index("articles")
+    .Query(q => q.Match(m => m.Field(f => f.Title).Query("postgres")))
+);
+// Returns: idf, tf, field length norm — the three BM25 components
 ```
 
 ---

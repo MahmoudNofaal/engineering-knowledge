@@ -16,67 +16,92 @@ Build a binary tree where each leaf represents one array element, and each inter
 ## The Code
 
 **Segment tree for range sum queries with point updates**
-```python
-class SegmentTree:
-    def __init__(self, nums: list):
-        self.n = len(nums)
-        self.tree = [0] * (4 * self.n)
-        self._build(nums, 0, 0, self.n - 1)
+```csharp
+public class SegmentTree
+{
+    private readonly int[] _tree;
+    private readonly int _n;
 
-    def _build(self, nums, node, start, end):
-        if start == end:
-            self.tree[node] = nums[start]
-        else:
-            mid = (start + end) // 2
-            self._build(nums, 2*node,   start, mid)
-            self._build(nums, 2*node+1, mid+1, end)
-            self.tree[node] = self.tree[2*node] + self.tree[2*node+1]
+    public SegmentTree(int[] nums)
+    {
+        _n = nums.Length;
+        _tree = new int[4 * _n];
+        Build(nums, 0, 0, _n - 1);
+    }
 
-    def update(self, idx: int, val: int) -> None:  # O(log n)
-        self._update(0, 0, self.n - 1, idx, val)
+    private void Build(int[] nums, int node, int start, int end)
+    {
+        if (start == end)
+        {
+            _tree[node] = nums[start];
+        }
+        else
+        {
+            int mid = (start + end) / 2;
+            Build(nums, 2 * node, start, mid);
+            Build(nums, 2 * node + 1, mid + 1, end);
+            _tree[node] = _tree[2 * node] + _tree[2 * node + 1];
+        }
+    }
 
-    def _update(self, node, start, end, idx, val):
-        if start == end:
-            self.tree[node] = val
-        else:
-            mid = (start + end) // 2
-            if idx <= mid:
-                self._update(2*node,   start, mid,   idx, val)
-            else:
-                self._update(2*node+1, mid+1, end,   idx, val)
-            self.tree[node] = self.tree[2*node] + self.tree[2*node+1]
+    public void Update(int idx, int val)  // O(log n)
+    {
+        DoUpdate(0, 0, _n - 1, idx, val);
+    }
 
-    def query(self, l: int, r: int) -> int:  # O(log n)
-        return self._query(0, 0, self.n - 1, l, r)
+    private void DoUpdate(int node, int start, int end, int idx, int val)
+    {
+        if (start == end)
+        {
+            _tree[node] = val;
+        }
+        else
+        {
+            int mid = (start + end) / 2;
+            if (idx <= mid)
+                DoUpdate(2 * node, start, mid, idx, val);
+            else
+                DoUpdate(2 * node + 1, mid + 1, end, idx, val);
+            _tree[node] = _tree[2 * node] + _tree[2 * node + 1];
+        }
+    }
 
-    def _query(self, node, start, end, l, r):
-        if r < start or end < l:
-            return 0          # out of range — identity for sum
-        if l <= start and end <= r:
-            return self.tree[node]  # fully inside range
-        mid = (start + end) // 2
-        left  = self._query(2*node,   start, mid,   l, r)
-        right = self._query(2*node+1, mid+1, end,   l, r)
-        return left + right
+    public int Query(int l, int r)  // O(log n)
+    {
+        return DoQuery(0, 0, _n - 1, l, r);
+    }
+
+    private int DoQuery(int node, int start, int end, int l, int r)
+    {
+        if (r < start || end < l)
+            return 0;          // out of range — identity for sum
+        if (l <= start && end <= r)
+            return _tree[node];  // fully inside range
+        int mid = (start + end) / 2;
+        int left = DoQuery(2 * node, start, mid, l, r);
+        int right = DoQuery(2 * node + 1, mid + 1, end, l, r);
+        return left + right;
+    }
+}
 ```
 
 **Usage**
-```python
-nums = [1, 3, 5, 7, 9, 11]
-st = SegmentTree(nums)
-print(st.query(1, 3))   # 3+5+7 = 15
-st.update(1, 10)        # nums[1] = 10
-print(st.query(1, 3))   # 10+5+7 = 22
+```csharp
+int[] nums = { 1, 3, 5, 7, 9, 11 };
+var st = new SegmentTree(nums);
+Console.WriteLine(st.Query(1, 3));   // 3+5+7 = 15
+st.Update(1, 10);        // nums[1] = 10
+Console.WriteLine(st.Query(1, 3));   // 10+5+7 = 22
 ```
 
 **Lazy propagation — range updates in O(log n)**
-```python
-# Without lazy propagation, updating a range of m elements costs O(m log n).
-# Lazy propagation defers range updates: mark a node "pending"
-# and only push the update down when a child is actually accessed.
-# Full implementation is long; the concept: each node stores a lazy tag
-# that represents a pending operation for its entire subtree.
-# When querying or updating children, flush the lazy tag first.
+```csharp
+// Without lazy propagation, updating a range of m elements costs O(m log n).
+// Lazy propagation defers range updates: mark a node "pending"
+// and only push the update down when a child is actually accessed.
+// Full implementation is long; the concept: each node stores a lazy tag
+// that represents a pending operation for its entire subtree.
+// When querying or updating children, flush the lazy tag first.
 ```
 
 ---

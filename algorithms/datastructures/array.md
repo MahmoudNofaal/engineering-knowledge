@@ -16,49 +16,57 @@ An array maps directly to a block of memory. Element 0 starts at the base addres
 ## The Code
 
 **Basic operations**
-```python
-items = [10, 20, 30, 40, 50]
+```csharp
+var items = new List<int> { 10, 20, 30, 40, 50 };
 
-# O(1) access
-print(items[2])        # 30
+// O(1) access
+Console.WriteLine(items[2]);        // 30
 
-# O(1) append (amortized)
-items.append(60)
+// O(1) append (amortized)
+items.Add(60);
 
-# O(n) insert at arbitrary position — everything after shifts right
-items.insert(1, 99)
+// O(n) insert at arbitrary position — everything after shifts right
+items.Insert(1, 99);
 
-# O(n) delete at arbitrary position — everything after shifts left
-items.pop(1)
+// O(n) delete at arbitrary position — everything after shifts left
+items.RemoveAt(1);
 
-# O(n) search — no index to help, must scan
-print(42 in items)
+// O(n) search — no index to help, must scan
+Console.WriteLine(items.Contains(42));
 ```
 
 **Sliding window — O(n) instead of O(n²)**
-```python
-def max_sum_subarray(items: list, k: int) -> int:
-    window = sum(items[:k])
-    best = window
-    for i in range(k, len(items)):
-        window += items[i] - items[i - k]  # slide: add right, drop left
-        best = max(best, window)
-    return best
+```csharp
+public static int MaxSumSubarray(List<int> items, int k)
+{
+    int window = items.Take(k).Sum();
+    int best = window;
+    for (int i = k; i < items.Count; i++)
+    {
+        window += items[i] - items[i - k];  // slide: add right, drop left
+        best = Math.Max(best, window);
+    }
+    return best;
+}
 ```
 
 **Two-pointer — O(n) pair search on sorted array**
-```python
-def two_sum_sorted(items: list, target: int) -> tuple:
-    lo, hi = 0, len(items) - 1
-    while lo < hi:
-        s = items[lo] + items[hi]
-        if s == target:
-            return (lo, hi)
-        elif s < target:
-            lo += 1
-        else:
-            hi -= 1
-    return (-1, -1)
+```csharp
+public static (int, int) TwoSumSorted(List<int> items, int target)
+{
+    int lo = 0, hi = items.Count - 1;
+    while (lo < hi)
+    {
+        int s = items[lo] + items[hi];
+        if (s == target)
+            return (lo, hi);
+        else if (s < target)
+            lo++;
+        else
+            hi--;
+    }
+    return (-1, -1);
+}
 ```
 
 ---

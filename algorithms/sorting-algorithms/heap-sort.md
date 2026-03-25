@@ -16,54 +16,72 @@ Heap sort has two phases. First, build a max-heap from the array in O(n) using h
 ## The Code
 
 **Heap sort — full implementation**
-```python
-def heap_sort(items: list) -> None:
-    n = len(items)
+```csharp
+public static void HeapSort(List<int> items)
+{
+    int n = items.Count;
 
-    # Phase 1: build max-heap in O(n)
-    # start from last non-leaf node and sift down each
-    for i in range(n // 2 - 1, -1, -1):
-        sift_down(items, n, i)
+    // Phase 1: build max-heap in O(n)
+    // start from last non-leaf node and sift down each
+    for (int i = n / 2 - 1; i >= 0; i--)
+        SiftDown(items, n, i);
 
-    # Phase 2: extract max n-1 times
-    for end in range(n - 1, 0, -1):
-        items[0], items[end] = items[end], items[0]  # move max to sorted region
-        sift_down(items, end, 0)                     # restore heap on reduced range
+    // Phase 2: extract max n-1 times
+    for (int end = n - 1; end > 0; end--)
+    {
+        int temp = items[0];
+        items[0] = items[end];
+        items[end] = temp;  // move max to sorted region
+        SiftDown(items, end, 0);                     // restore heap on reduced range
+    }
+}
 
-def sift_down(items: list, heap_size: int, root: int) -> None:
-    largest = root
-    left  = 2 * root + 1
-    right = 2 * root + 2
+public static void SiftDown(List<int> items, int heapSize, int root)
+{
+    int largest = root;
+    int left = 2 * root + 1;
+    int right = 2 * root + 2;
 
-    if left < heap_size and items[left] > items[largest]:
-        largest = left
-    if right < heap_size and items[right] > items[largest]:
-        largest = right
+    if (left < heapSize && items[left] > items[largest])
+        largest = left;
+    if (right < heapSize && items[right] > items[largest])
+        largest = right;
 
-    if largest != root:
-        items[root], items[largest] = items[largest], items[root]
-        sift_down(items, heap_size, largest)   # recurse down
+    if (largest != root)
+    {
+        int temp = items[root];
+        items[root] = items[largest];
+        items[largest] = temp;
+        SiftDown(items, heapSize, largest);   // recurse down
+    }
+}
 ```
 
 **Usage**
-```python
-arr = [12, 11, 13, 5, 6, 7]
-heap_sort(arr)
-print(arr)  # [5, 6, 7, 11, 12, 13]
+```csharp
+var arr = new List<int> { 12, 11, 13, 5, 6, 7 };
+HeapSort(arr);
+Console.WriteLine(string.Join(", ", arr));  // [5, 6, 7, 11, 12, 13]
 ```
 
 **Step-by-step visualization**
-```python
-def heap_sort_verbose(items: list) -> None:
-    n = len(items)
-    for i in range(n // 2 - 1, -1, -1):
-        sift_down(items, n, i)
-    print(f"Max-heap built: {items}")
+```csharp
+public static void HeapSortVerbose(List<int> items)
+{
+    int n = items.Count;
+    for (int i = n / 2 - 1; i >= 0; i--)
+        SiftDown(items, n, i);
+    Console.WriteLine($"Max-heap built: [{string.Join(", ", items)}]");
 
-    for end in range(n - 1, 0, -1):
-        items[0], items[end] = items[end], items[0]
-        print(f"Extracted max {items[end]}, array: {items}")
-        sift_down(items, end, 0)
+    for (int end = n - 1; end > 0; end--)
+    {
+        int temp = items[0];
+        items[0] = items[end];
+        items[end] = temp;
+        Console.WriteLine($"Extracted max {items[end]}, array: [{string.Join(", ", items)}]");
+        SiftDown(items, end, 0);
+    }
+}
 ```
 
 ---

@@ -15,75 +15,96 @@ Vertical scaling (scale up) means giving your existing server more CPU, RAM, or 
 ---
 
 ## The Code
-```python
-# ── Vertical scaling: same server, bigger resources ───────────────────────
-# No code change needed. But here's what the limit looks like:
+```csharp
+// ── Vertical scaling: same server, bigger resources ───────────────────────
+// No code change needed. But here's what the limit looks like:
 
-vertical_limits = {
-    "max_cpu_cores":    "~192 cores (AWS u-24tb1.metal)",
-    "max_ram":          "~24 TB (high-memory instances)",
-    "max_network":      "~400 Gbps",
-    "max_nvme_iops":    "~3.8M IOPS (io2 Block Express)",
-    "single_point_of_failure": True,    # one machine, one failure domain
-    "cost_scaling":     "superlinear — 2x resources costs >2x",
-}
+var verticalLimits = new Dictionary<string, object>
+{
+    { "max_cpu_cores",    "~192 cores (AWS u-24tb1.metal)" },
+    { "max_ram",          "~24 TB (high-memory instances)" },
+    { "max_network",      "~400 Gbps" },
+    { "max_nvme_iops",    "~3.8M IOPS (io2 Block Express)" },
+    { "single_point_of_failure", true },    // one machine, one failure domain
+    { "cost_scaling",     "superlinear — 2x resources costs >2x" },
+};
 
-# ── Horizontal scaling: more servers, distributed load ────────────────────
-# Requires: stateless services, external session/cache, shared storage
+// ── Horizontal scaling: more servers, distributed load ────────────────────
+// Requires: stateless services, external session/cache, shared storage
 
-horizontal_requirements = {
-    "stateless_app_tier":    True,   # no local session state
-    "external_session_store": "Redis / DynamoDB",
-    "shared_file_storage":    "S3 / EFS / NFS",
-    "load_balancer":          "required to distribute traffic",
-    "service_discovery":      "required for services to find each other",
-    "distributed_tracing":    "required to debug across nodes",
-}
+var horizontalRequirements = new Dictionary<string, object>
+{
+    { "stateless_app_tier",    true },   // no local session state
+    { "external_session_store", "Redis / DynamoDB" },
+    { "shared_file_storage",    "S3 / EFS / NFS" },
+    { "load_balancer",          "required to distribute traffic" },
+    { "service_discovery",      "required for services to find each other" },
+    { "distributed_tracing",    "required to debug across nodes" },
+};
 ```
-```python
-# ── Detecting when vertical scaling is failing ────────────────────────────
-import psutil
+```csharp
+// ── Detecting when vertical scaling is failing ────────────────────────────
+using System;
+using System.Diagnostics;
 
-def scaling_pressure_report() -> dict:
-    cpu_pct    = psutil.cpu_percent(interval=1)
-    ram        = psutil.virtual_memory()
-    disk_io    = psutil.disk_io_counters()
+public Dictionary<string, object> ScalingPressureReport()
+{
+    var cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
+    float cpuPct = cpuCounter.NextValue();
 
-    return {
-        "cpu_utilization_pct":  cpu_pct,
-        "ram_used_pct":         ram.percent,
-        "ram_available_gb":     ram.available / 1e9,
-        "recommendation": (
-            "Scale up: CPU bottleneck, add cores"    if cpu_pct > 85 else
-            "Scale up: RAM bottleneck, add memory"   if ram.percent > 90 else
-            "Current resources adequate"
-        )
+    var ramCounter = new PerformanceCounter("Memory", "Available MBytes");
+    float ramAvailableGb = ramCounter.NextValue() / 1024f;
+    var ramTotalCounter = new PerformanceCounter("Memory", "Committed Bytes");
+    float ramUsedPct = (ramTotalCounter.NextValue() / 1024f / 1024f) / 100f;
+
+    string recommendation = cpuPct > 85 ? "Scale up: CPU bottleneck, add cores" :
+                           ramUsedPct > 90 ? "Scale up: RAM bottleneck, add memory" :
+                           "Current resources adequate";
+
+    return new Dictionary<string, object>
+    {
+        { "cpu_utilization_pct", cpuPct },
+        { "ram_available_gb", ramAvailableGb },
+        { "recommendation", recommendation }
+    };
+}
+
+var report = ScalingPressureReport();
+Console.WriteLine($"CPU: {report["cpu_utilization_pct"]}%, Recommendation: {report["recommendation"]}");
+// When "scale up" keeps appearing but you're already on the biggest
+// available instance → time to rearchitect for horizontal scaling.
+```
+```csharp
+// ── Stateless service: safe to scale horizontally ─────────────────────────
+// All state is externalized — any instance can handle any request
+
+using StackExchange.Redis;
+using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
+
+public class UserController : ControllerBase
+{
+    private readonly IDatabase _redisCache;
+
+    public UserController(IConnectionMultiplexer redis)
+    {
+        _redisCache = redis.GetDatabase();
     }
 
-report = scaling_pressure_report()
-print(report)
-# When "scale up" keeps appearing but you're already on the biggest
-# available instance → time to rearchitect for horizontal scaling.
-```
-```python
-# ── Stateless service: safe to scale horizontally ─────────────────────────
-# All state is externalized — any instance can handle any request
-
-import redis
-from flask import Flask, request, jsonify
-
-app   = Flask(__name__)
-cache = redis.Redis(host="redis-cluster", port=6379)
-
-@app.route("/user/<user_id>")
-def get_user(user_id: str):
-    # State lives in Redis, not in this process's memory.
-    # Adding 10 more instances of this service needs zero code change.
-    cached = cache.get(f"user:{user_id}")
-    if cached:
-        return jsonify({"source": "cache", "data": cached.decode()})
-    # ... fetch from DB, populate cache, return result
-    return jsonify({"source": "db", "data": f"user_{user_id}_data"})
+    [HttpGet("/user/{userId}")]
+    public IActionResult GetUser(string userId)
+    {
+        // State lives in Redis, not in this process's memory.
+        // Adding 10 more instances of this service needs zero code change.
+        var cached = _redisCache.StringGet($"user:{userId}");
+        if (cached.HasValue)
+        {
+            return Ok(new { source = "cache", data = cached.ToString() });
+        }
+        // ... fetch from DB, populate cache, return result
+        return Ok(new { source = "db", data = $"user_{userId}_data" });
+    }
+}
 ```
 
 ---

@@ -21,69 +21,105 @@ The three traversal orders are the foundation of everything else:
 ## The Code
 
 **Node definition**
-```python
-class TreeNode:
-    def __init__(self, val: int):
-        self.val = val
-        self.left = None
-        self.right = None
+```csharp
+public class TreeNode
+{
+    public int Val { get; set; }
+    public TreeNode Left { get; set; }
+    public TreeNode Right { get; set; }
+
+    public TreeNode(int val)
+    {
+        Val = val;
+        Left = null;
+        Right = null;
+    }
+}
 ```
 
 **Three traversals — recursive**
-```python
-def inorder(node: TreeNode) -> list:
-    if not node:
-        return []
-    return inorder(node.left) + [node.val] + inorder(node.right)
+```csharp
+public List<int> Inorder(TreeNode node)
+{
+    if (node == null)
+        return new List<int>();
+    var result = Inorder(node.Left);
+    result.Add(node.Val);
+    result.AddRange(Inorder(node.Right));
+    return result;
+}
 
-def preorder(node: TreeNode) -> list:
-    if not node:
-        return []
-    return [node.val] + preorder(node.left) + preorder(node.right)
+public List<int> Preorder(TreeNode node)
+{
+    if (node == null)
+        return new List<int>();
+    var result = new List<int> { node.Val };
+    result.AddRange(Preorder(node.Left));
+    result.AddRange(Preorder(node.Right));
+    return result;
+}
 
-def postorder(node: TreeNode) -> list:
-    if not node:
-        return []
-    return postorder(node.left) + postorder(node.right) + [node.val]
+public List<int> Postorder(TreeNode node)
+{
+    if (node == null)
+        return new List<int>();
+    var result = Postorder(node.Left);
+    result.AddRange(Postorder(node.Right));
+    result.Add(node.Val);
+    return result;
+}
 ```
 
 **Height and depth**
-```python
-def height(node: TreeNode) -> int:
-    if not node:
-        return 0
-    return 1 + max(height(node.left), height(node.right))
+```csharp
+public int Height(TreeNode node)
+{
+    if (node == null)
+        return 0;
+    return 1 + Math.Max(Height(node.Left), Height(node.Right));
+}
 ```
 
 **Level-order traversal (BFS)**
-```python
-from collections import deque
+```csharp
+using System.Collections.Generic;
 
-def level_order(root: TreeNode) -> list[list]:
-    if not root:
-        return []
-    result, queue = [], deque([root])
-    while queue:
-        level = []
-        for _ in range(len(queue)):       # snapshot the current level size
-            node = queue.popleft()
-            level.append(node.val)
-            if node.left:  queue.append(node.left)
-            if node.right: queue.append(node.right)
-        result.append(level)
-    return result
+public List<List<int>> LevelOrder(TreeNode root)
+{
+    if (root == null)
+        return new List<List<int>>();
+    var result = new List<List<int>>();
+    var queue = new Queue<TreeNode>();
+    queue.Enqueue(root);
+    while (queue.Count > 0)
+    {
+        var level = new List<int>();
+        int levelSize = queue.Count;       // snapshot the current level size
+        for (int i = 0; i < levelSize; i++)
+        {
+            var node = queue.Dequeue();
+            level.Add(node.Val);
+            if (node.Left != null) queue.Enqueue(node.Left);
+            if (node.Right != null) queue.Enqueue(node.Right);
+        }
+        result.Add(level);
+    }
+    return result;
+}
 ```
 
 **Lowest Common Ancestor**
-```python
-def lca(root: TreeNode, p: TreeNode, q: TreeNode) -> TreeNode:
-    if not root or root == p or root == q:
-        return root
-    left  = lca(root.left,  p, q)
-    right = lca(root.right, p, q)
-    if left and right:
-        return root   # p and q are on opposite sides
-    return left or right
+```csharp
+public TreeNode LCA(TreeNode root, TreeNode p, TreeNode q)
+{
+    if (root == null || root == p || root == q)
+        return root;
+    var left = LCA(root.Left, p, q);
+    var right = LCA(root.Right, p, q);
+    if (left != null && right != null)
+        return root;   // p and q are on opposite sides
+    return left ?? right;
+}
 ```
 
 ---

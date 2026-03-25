@@ -15,64 +15,95 @@ In a distributed system, network partitions — where nodes can't talk to each o
 ---
 
 ## The Code
-```python
-# ── Simulating CP vs AP behavior during a partition ───────────────────────
+```csharp
+// ── Simulating CP vs AP behavior during a partition ───────────────────────────────
 
-from enum import Enum
+using System;
+using System.Collections.Generic;
 
-class Mode(Enum):
-    CP = "consistent"    # refuse writes during partition to stay correct
-    AP = "available"     # accept writes during partition, reconcile later
+public enum Mode { CP, AP }
 
-class DistributedNode:
-    def __init__(self, node_id: str, mode: Mode):
-        self.node_id = node_id
-        self.mode = mode
-        self.data: dict = {}
-        self.partitioned = False   # simulates a network split
+public class DistributedNode
+{
+    public string NodeId { get; set; }
+    public Mode Mode { get; set; }
+    public Dictionary<string, string> Data { get; set; }
+    public bool Partitioned { get; set; }
 
-    def write(self, key: str, value: str) -> dict:
-        if self.partitioned and self.mode == Mode.CP:
-            # CP: refuse the write — can't confirm other nodes agree
-            return {"ok": False, "error": "Partition detected. Write rejected to preserve consistency."}
+    public DistributedNode(string nodeId, Mode mode)
+    {
+        NodeId = nodeId;
+        Mode = mode;
+        Data = new Dictionary<string, string>();
+        Partitioned = false;
+    }
 
-        # AP: accept the write locally, reconcile with peers later
-        self.data[key] = value
-        return {"ok": True, "node": self.node_id, "note": "Written locally. May conflict with peers."}
+    public Dictionary<string, object> Write(string key, string value)
+    {
+        if (Partitioned && Mode == Mode.CP)
+        {
+            // CP: refuse the write — can't confirm other nodes agree
+            return new Dictionary<string, object>
+            {
+                { "ok", false },
+                { "error", "Partition detected. Write rejected to preserve consistency." }
+            };
+        }
 
-    def read(self, key: str) -> dict:
-        return {"ok": True, "value": self.data.get(key), "node": self.node_id}
+        // AP: accept the write locally, reconcile with peers later
+        Data[key] = value;
+        return new Dictionary<string, object>
+        {
+            { "ok", true },
+            { "node", NodeId },
+            { "note", "Written locally. May conflict with peers." }
+        };
+    }
 
-
-cp_node = DistributedNode("primary", Mode.CP)
-ap_node = DistributedNode("replica", Mode.AP)
-
-cp_node.partitioned = True
-ap_node.partitioned = True
-
-print(cp_node.write("user:1", "Alice"))   # rejected
-print(ap_node.write("user:1", "Alice"))   # accepted, may diverge
-```
-```python
-# ── Real-world database positioning on the CAP triangle ──────────────────
-
-databases = {
-    # CP — consistent, may be unavailable during partitions
-    "HBase":       "CP — refuses reads/writes when quorum not reached",
-    "Zookeeper":   "CP — coordination system, correctness over availability",
-    "MongoDB":     "CP (default) — primary-only writes; goes unavailable without quorum",
-
-    # AP — available, may serve stale data during partitions
-    "Cassandra":   "AP — always writable, eventual consistency, tunable per query",
-    "CouchDB":     "AP — accepts writes everywhere, resolves conflicts on sync",
-    "DynamoDB":    "AP (default) — eventually consistent reads; strongly consistent optional",
-
-    # CA — only possible without partitions (i.e., single node or trusted network)
-    "PostgreSQL":  "CA — single node only; distributed Postgres gives up C or A",
+    public Dictionary<string, object> Read(string key)
+    {
+        return new Dictionary<string, object>
+        {
+            { "ok", true },
+            { "value", Data.ContainsKey(key) ? Data[key] : null },
+            { "node", NodeId }
+        };
+    }
 }
 
-for db, position in databases.items():
-    print(f"{db:<14} {position}")
+// Usage
+var cpNode = new DistributedNode("primary", Mode.CP);
+var apNode = new DistributedNode("replica", Mode.AP);
+
+cpNode.Partitioned = true;
+apNode.Partitioned = true;
+
+Console.WriteLine(string.Join(", ", cpNode.Write("user:1", "Alice").Values));   // rejected
+Console.WriteLine(string.Join(", ", apNode.Write("user:1", "Alice").Values));   // accepted
+```
+```csharp
+// ── Real-world database positioning on the CAP triangle ──────────────────────────────
+
+var databases = new Dictionary<string, string>
+{
+    // CP — consistent, may be unavailable during partitions
+    { "HBase",      "CP — refuses reads/writes when quorum not reached" },
+    { "Zookeeper",  "CP — coordination system, correctness over availability" },
+    { "MongoDB",    "CP (default) — primary-only writes; goes unavailable without quorum" },
+
+    // AP — available, may serve stale data during partitions
+    { "Cassandra",  "AP — always writable, eventual consistency, tunable per query" },
+    { "CouchDB",    "AP — accepts writes everywhere, resolves conflicts on sync" },
+    { "DynamoDB",   "AP (default) — eventually consistent reads; strongly consistent optional" },
+
+    // CA — only possible without partitions (i.e., single node or trusted network)
+    { "PostgreSQL", "CA — single node only; distributed Postgres gives up C or A" },
+};
+
+foreach (var (db, position) in databases)
+{
+    Console.WriteLine($"{db,-14} {position}");
+}
 ```
 
 ---

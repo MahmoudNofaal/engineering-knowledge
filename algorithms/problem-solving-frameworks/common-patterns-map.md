@@ -18,147 +18,75 @@ The map below is organized by signal (what you read in the problem) → pattern 
 ## The Code
 
 **The full pattern map**
-```python
-PATTERN_MAP = {
+```csharp
+var patternMap = new Dictionary<string, string>
+{
+    // ── ARRAY PROBLEMS ──────────────────────────────────────────────────────
+    { "find pair/triplet with target sum in sorted array", "two pointers → two-pointers.md" },
+    { "longest/shortest subarray or substring with constraint", "sliding window → sliding-window.md" },
+    { "subarray with exactly k [distinct/odd/etc]", "sliding window: exactly(k) = atMost(k) - atMost(k-1) → sliding-window.md" },
+    { "maximum subarray sum", "Kadane's algorithm (greedy DP) → dynamic-programming.md" },
+    { "range sum query on mutable array", "segment tree → segment-tree.md" },
+    { "range sum query on immutable array", "prefix sums → array.md" },
+    { "sorted array + find value or boundary", "binary search → binary-search.md" },
+    { "find minimum X such that condition(X) is true", "binary search on answer space → binary-search.md" },
 
-    # ── ARRAY PROBLEMS ──────────────────────────────────────────────────────
+    // ── LINKED LIST PROBLEMS ─────────────────────────────────────────────────
+    { "detect cycle in linked list", "fast/slow pointers → fast-slow-pointers.md" },
+    { "find cycle entry point", "fast/slow pointers phase 2 → fast-slow-pointers.md" },
+    { "find middle of linked list", "fast/slow pointers → fast-slow-pointers.md" },
+    { "kth node from end", "fast/slow pointers with k-step head start → fast-slow-pointers.md" },
 
-    "find pair/triplet with target sum in sorted array":
-        "two pointers → two-pointers.md",
+    // ── TREE PROBLEMS ────────────────────────────────────────────────────────
+    { "tree traversal (inorder/preorder/postorder)", "DFS → depth-first-search.md" },
+    { "level order traversal / minimum depth", "BFS → breadth-first-search.md" },
+    { "lowest common ancestor", "DFS with return-value pattern → tree.md" },
+    { "validate BST / sorted order", "inorder DFS on BST → balanced-bst.md" },
 
-    "longest/shortest subarray or substring with constraint":
-        "sliding window → sliding-window.md",
+    // ── GRAPH PROBLEMS ───────────────────────────────────────────────────────
+    { "shortest path, unweighted graph or grid", "BFS → breadth-first-search.md" },
+    { "shortest path, weighted graph, non-negative weights", "Dijkstra → dijkstra.md" },
+    { "shortest path with spatial heuristic (game maps, GPS)", "A* → a-star.md" },
+    { "detect cycle in directed graph", "three-color DFS → depth-first-search.md" },
+    { "topological sort / course schedule", "Kahn's BFS or DFS postorder → graph.md" },
+    { "number of islands / connected components", "DFS or BFS flood fill → depth-first-search.md" },
+    { "all paths from source to target", "DFS backtracking → backtracking.md" },
 
-    "subarray with exactly k [distinct/odd/etc]":
-        "sliding window: exactly(k) = atMost(k) - atMost(k-1) → sliding-window.md",
+    // ── STRING PROBLEMS ──────────────────────────────────────────────────────
+    { "prefix search / autocomplete / word starts with", "trie → trie.md" },
+    { "longest common subsequence / edit distance", "2D DP → dynamic-programming.md" },
+    { "anagram / substring / window over characters", "sliding window + frequency map → sliding-window.md" },
 
-    "maximum subarray sum":
-        "Kadane's algorithm (greedy DP) → dynamic-programming.md",
+    // ── OPTIMIZATION / COUNTING ──────────────────────────────────────────────
+    { "count ways to do X / minimum cost to reach Y", "dynamic programming → dynamic-programming.md" },
+    { "locally optimal choice leads to global optimum", "greedy → greedy-algorithms.md" },
+    { "interval scheduling / non-overlapping intervals", "greedy, sort by end time → greedy-algorithms.md" },
+    { "top-k elements / kth largest / streaming median", "heap → heap.md" },
+    { "merge k sorted lists", "heap (k-way merge) → heap.md" },
 
-    "range sum query on mutable array":
-        "segment tree → segment-tree.md",
+    // ── ENUMERATION ─────────────────────────────────────────────────────────
+    { "enumerate all subsets / combinations / permutations", "backtracking → backtracking.md" },
+    { "Sudoku / N-queens / constraint satisfaction", "backtracking with pruning → backtracking.md" },
+    { "subsets as state (small n ≤ 20)", "bitmask DP → bit-manipulation.md + dynamic-programming.md" },
 
-    "range sum query on immutable array":
-        "prefix sums → array.md",
+    // ── BIT / MATH ──────────────────────────────────────────────────────────
+    { "find unpaired element / XOR trick", "bit manipulation → bit-manipulation.md" },
+    { "check power of 2 / count set bits", "bit manipulation → bit-manipulation.md" },
 
-    "sorted array + find value or boundary":
-        "binary search → binary-search.md",
-
-    "find minimum X such that condition(X) is true":
-        "binary search on answer space → binary-search.md",
-
-    # ── LINKED LIST PROBLEMS ─────────────────────────────────────────────────
-
-    "detect cycle in linked list":
-        "fast/slow pointers → fast-slow-pointers.md",
-
-    "find cycle entry point":
-        "fast/slow pointers phase 2 → fast-slow-pointers.md",
-
-    "find middle of linked list":
-        "fast/slow pointers → fast-slow-pointers.md",
-
-    "kth node from end":
-        "fast/slow pointers with k-step head start → fast-slow-pointers.md",
-
-    # ── TREE PROBLEMS ────────────────────────────────────────────────────────
-
-    "tree traversal (inorder/preorder/postorder)":
-        "DFS → depth-first-search.md",
-
-    "level order traversal / minimum depth":
-        "BFS → breadth-first-search.md",
-
-    "lowest common ancestor":
-        "DFS with return-value pattern → tree.md",
-
-    "validate BST / sorted order":
-        "inorder DFS on BST → balanced-bst.md",
-
-    # ── GRAPH PROBLEMS ───────────────────────────────────────────────────────
-
-    "shortest path, unweighted graph or grid":
-        "BFS → breadth-first-search.md",
-
-    "shortest path, weighted graph, non-negative weights":
-        "Dijkstra → dijkstra.md",
-
-    "shortest path with spatial heuristic (game maps, GPS)":
-        "A* → a-star.md",
-
-    "detect cycle in directed graph":
-        "three-color DFS → depth-first-search.md",
-
-    "topological sort / course schedule":
-        "Kahn's BFS or DFS postorder → graph.md",
-
-    "number of islands / connected components":
-        "DFS or BFS flood fill → depth-first-search.md",
-
-    "all paths from source to target":
-        "DFS backtracking → backtracking.md",
-
-    # ── STRING PROBLEMS ──────────────────────────────────────────────────────
-
-    "prefix search / autocomplete / word starts with":
-        "trie → trie.md",
-
-    "longest common subsequence / edit distance":
-        "2D DP → dynamic-programming.md",
-
-    "anagram / substring / window over characters":
-        "sliding window + frequency map → sliding-window.md",
-
-    # ── OPTIMIZATION / COUNTING ──────────────────────────────────────────────
-
-    "count ways to do X / minimum cost to reach Y":
-        "dynamic programming → dynamic-programming.md",
-
-    "locally optimal choice leads to global optimum":
-        "greedy → greedy-algorithms.md",
-
-    "interval scheduling / non-overlapping intervals":
-        "greedy, sort by end time → greedy-algorithms.md",
-
-    "top-k elements / kth largest / streaming median":
-        "heap → heap.md",
-
-    "merge k sorted lists":
-        "heap (k-way merge) → heap.md",
-
-    # ── ENUMERATION ─────────────────────────────────────────────────────────
-
-    "enumerate all subsets / combinations / permutations":
-        "backtracking → backtracking.md",
-
-    "Sudoku / N-queens / constraint satisfaction":
-        "backtracking with pruning → backtracking.md",
-
-    "subsets as state (small n ≤ 20)":
-        "bitmask DP → bit-manipulation.md + dynamic-programming.md",
-
-    # ── BIT / MATH ──────────────────────────────────────────────────────────
-
-    "find unpaired element / XOR trick":
-        "bit manipulation → bit-manipulation.md",
-
-    "check power of 2 / count set bits":
-        "bit manipulation → bit-manipulation.md",
-
-    # ── DIVIDE AND CONQUER ───────────────────────────────────────────────────
-
-    "independent subproblems of same form":
-        "divide and conquer → divide-and-conquer.md",
-
-    "overlapping subproblems of same form":
-        "dynamic programming → dynamic-programming.md",
-}
+    // ── DIVIDE AND CONQUER ───────────────────────────────────────────────────
+    { "independent subproblems of same form", "divide and conquer → divide-and-conquer.md" },
+    { "overlapping subproblems of same form", "dynamic programming → dynamic-programming.md" },
+};
 ```
 
 **Decision tree for the five most common interview problem types**
-```python
-def first_questions_to_ask(problem):
-    """
+```csharp
+/// <summary>
+/// Decision tree for diagnosing problem type and choosing algorithm
+/// </summary>
+public void FirstQuestionsToAsk(string problem)
+{
+    /*
     Q1: Is the input sorted, or can I sort it?
         YES → binary search or two pointers
         NO  → continue
@@ -170,7 +98,7 @@ def first_questions_to_ask(problem):
     Q3: Is it a graph or tree problem?
         YES → shortest path? → BFS/Dijkstra
               all paths / cycle? → DFS
-              NO  → continue
+        NO  → continue
 
     Q4: Is it asking to count ways or find optimal value?
         YES → does it have overlapping subproblems? → DP
@@ -179,9 +107,8 @@ def first_questions_to_ask(problem):
 
     Q5: Is it asking to enumerate all valid combinations?
         YES → backtracking
-    """
-    pass
-```
+    */
+}
 
 ---
 

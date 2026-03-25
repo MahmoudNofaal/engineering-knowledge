@@ -15,112 +15,164 @@ Rate limiting tracks how many requests a client has made within some time window
 ---
 
 ## The Code
-```python
-# ── Token bucket — allows bursts up to bucket capacity ───────────────────
-# Tokens refill at a fixed rate. Each request consumes one token.
-# If bucket is empty, request is rejected. Burst-friendly.
+```csharp
+// ── Token bucket — allows bursts up to bucket capacity ──────────────────────────────────────────────────────────────
+// Tokens refill at a fixed rate. Each request consumes one token.
+// If bucket is empty, request is rejected. Burst-friendly.
 
-import time
-import threading
+using System;
+using System.Threading;
 
-class TokenBucket:
-    def __init__(self, capacity: int, refill_rate: float):
-        """
-        capacity:    max tokens (= max burst size)
-        refill_rate: tokens added per second
-        """
-        self.capacity     = capacity
-        self.refill_rate  = refill_rate
-        self.tokens       = float(capacity)
-        self.last_refill  = time.monotonic()
-        self._lock        = threading.Lock()
+public class TokenBucket
+{
+    private readonly int capacity;
+    private readonly double refillRate;
+    private double tokens;
+    private long lastRefillTicks;
+    private readonly object lockObj = new object();
 
-    def allow(self) -> bool:
-        with self._lock:
-            now = time.monotonic()
-            elapsed = now - self.last_refill
-            # Add tokens earned since last check, up to capacity
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
-            self.last_refill = now
-
-            if self.tokens >= 1:
-                self.tokens -= 1
-                return True
-            return False   # bucket empty — request rejected
-
-# 10 req/s sustained, burst up to 50
-limiter = TokenBucket(capacity=50, refill_rate=10)
-
-for i in range(60):
-    allowed = limiter.allow()
-    print(f"Request {i+1:02d}: {'✓ allowed' if allowed else '✗ rejected'}")
-```
-```python
-# ── Sliding window counter (Redis-backed, distributed) ────────────────────
-# More accurate than fixed window. Practical for distributed systems.
-# Uses two fixed windows (current + previous) weighted by overlap.
-
-import redis
-import time
-
-r = redis.Redis(decode_responses=True)
-
-def is_allowed(client_id: str, limit: int, window_s: int) -> bool:
-    now         = time.time()
-    window_start = int(now // window_s) * window_s   # current window start
-    prev_start   = window_start - window_s            # previous window start
-
-    curr_key = f"ratelimit:{client_id}:{window_start}"
-    prev_key = f"ratelimit:{client_id}:{prev_start}"
-
-    pipe = r.pipeline()
-    pipe.incr(curr_key)
-    pipe.expire(curr_key, window_s * 2)
-    pipe.get(prev_key)
-    curr_count, _, prev_count = pipe.execute()
-
-    curr_count = int(curr_count)
-    prev_count = int(prev_count or 0)
-
-    # Weight previous window by how much of current window has elapsed
-    elapsed_fraction = (now - window_start) / window_s
-    weighted_count   = prev_count * (1 - elapsed_fraction) + curr_count
-
-    return weighted_count <= limit
-
-# 100 requests per 60-second window
-for i in range(110):
-    allowed = is_allowed("user:42", limit=100, window_s=60)
-    if not allowed:
-        print(f"Request {i+1}: rate limited")
-        break
-```
-```python
-# ── HTTP response headers — tell clients how to behave ────────────────────
-from flask import Flask, request, jsonify, Response
-
-app = Flask(__name__)
-
-@app.route("/api/data")
-def api_data():
-    client_id = request.headers.get("X-API-Key", request.remote_addr)
-    allowed   = is_allowed(client_id, limit=100, window_s=60)
-
-    headers = {
-        "X-RateLimit-Limit":     "100",
-        "X-RateLimit-Remaining": "0" if not allowed else "...",
-        "X-RateLimit-Reset":     str(int(time.time() // 60 + 1) * 60),
+    public TokenBucket(int capacity, double refillRate)
+    {
+        this.capacity = capacity;
+        this.refillRate = refillRate;
+        this.tokens = capacity;
+        this.lastRefillTicks = DateTime.UtcNow.Ticks;
     }
 
-    if not allowed:
-        return Response(
-            '{"error": "rate limit exceeded"}',
-            status=429,                      # Too Many Requests — the correct status code
-            headers={**headers, "Retry-After": "60"},
-            mimetype="application/json"
-        )
+    public bool Allow()
+    {
+        lock (lockObj)
+        {
+            long now = DateTime.UtcNow.Ticks;
+            double elapsed = (now - lastRefillTicks) / (double)TimeSpan.TicksPerSecond;
+            // Add tokens earned since last check, up to capacity
+            tokens = Math.Min(capacity, tokens + elapsed * refillRate);
+            lastRefillTicks = now;
 
-    return jsonify({"data": "..."})
+            if (tokens >= 1)
+            {
+                tokens -= 1;
+                return true;
+            }
+            return false;   // bucket empty — request rejected
+        }
+    }
+}
+
+// 10 req/s sustained, burst up to 50
+var limiter = new TokenBucket(capacity: 50, refillRate: 10);
+
+for (int i = 0; i < 60; i++)
+{
+    bool allowed = limiter.Allow();
+    Console.WriteLine($"Request {i + 1:D2}: {(allowed ? "✓ allowed" : "✗ rejected")}");
+}
+```
+```csharp
+// ── Sliding window counter (Redis-backed, distributed) ────────────────────
+// More accurate than fixed window. Practical for distributed systems.
+// Uses two fixed windows (current + previous) weighted by overlap.
+
+using System;
+using StackExchange.Redis;
+
+public class SlidingWindowRateLimiter
+{
+    private readonly IDatabase db;
+
+    public SlidingWindowRateLimiter(IConnectionMultiplexer redis)
+    {
+        db = redis.GetDatabase();
+    }
+
+    public bool IsAllowed(string clientId, int limit, int windowSeconds)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long windowStart = (now / windowSeconds) * windowSeconds;   // current window start
+        long prevStart = windowStart - windowSeconds;                // previous window start
+
+        string currKey = $"ratelimit:{clientId}:{windowStart}";
+        string prevKey = $"ratelimit:{clientId}:{prevStart}";
+
+        var transaction = db.CreateTransaction();
+        // Increment current window and set expiry
+        transaction.StringIncrementAsync(currKey);
+        transaction.KeyExpireAsync(currKey, TimeSpan.FromSeconds(windowSeconds * 2));
+        // Get previous window count
+        transaction.StringGetAsync(prevKey);
+        var results = transaction.Execute();
+
+        long currCount = (long)results[0];
+        long prevCount = 0;
+        if (results[2].HasValue)
+            prevCount = long.Parse(results[2].ToString());
+
+        // Weight previous window by how much of current window has elapsed
+        double elapsedFraction = (now - windowStart) / (double)windowSeconds;
+        double weightedCount = prevCount * (1 - elapsedFraction) + currCount;
+
+        return weightedCount <= limit;
+    }
+}
+
+// Usage: 100 requests per 60-second window
+var multiplexer = ConnectionMultiplexer.Connect("localhost:6379");
+var limiter = new SlidingWindowRateLimiter(multiplexer);
+
+for (int i = 0; i < 110; i++)
+{
+    bool allowed = limiter.IsAllowed("user:42", limit: 100, windowSeconds: 60);
+    if (!allowed)
+    {
+        Console.WriteLine($"Request {i + 1}: rate limited");
+        break;
+    }
+}
+```
+```csharp
+// ── HTTP response headers — tell clients how to behave ────────────────────
+using Microsoft.AspNetCore.Http;
+using System;
+using System.Collections.Generic;
+
+public class RateLimitMiddleware
+{
+    private readonly SlidingWindowRateLimiter limiter;
+
+    public RateLimitMiddleware(SlidingWindowRateLimiter limiter)
+    {
+        this.limiter = limiter;
+    }
+
+    public IResult GetApiData(HttpContext context)
+    {
+        var clientId = context.Request.Headers.TryGetValue("X-API-Key", out var apiKey)
+            ? apiKey.ToString()
+            : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        bool allowed = limiter.IsAllowed(clientId, limit: 100, windowSeconds: 60);
+
+        long resetTime = ((DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60) + 1) * 60;
+
+        var headers = new Dictionary<string, string>
+        {
+            { "X-RateLimit-Limit", "100" },
+            { "X-RateLimit-Remaining", allowed ? "..." : "0" },
+            { "X-RateLimit-Reset", resetTime.ToString() },
+        };
+
+        if (!allowed)
+        {
+            return Results.StatusCode(429)  // Too Many Requests — the correct status code
+                .WithHeaders(headers)
+                .WithHeaders(("Retry-After", "60"))
+                .WithContentType("application/json")
+                .WithJsonContent(new { error = "rate limit exceeded" });
+        }
+
+        return Results.Ok(new { data = "..." }).WithHeaders(headers);
+    }
+}
 ```
 
 ---

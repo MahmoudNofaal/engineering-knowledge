@@ -20,58 +20,96 @@ All three are comparison-based, in-place, and O(n²) worst-case. The difference 
 ## The Code
 
 **Bubble sort**
-```python
-def bubble_sort(items: list) -> list:
-    n = len(items)
-    for i in range(n):
-        swapped = False
-        for j in range(0, n - i - 1):         # last i elements already sorted
-            if items[j] > items[j + 1]:
-                items[j], items[j + 1] = items[j + 1], items[j]
-                swapped = True
-        if not swapped:
-            break                              # early exit if already sorted
-    return items
+```csharp
+public List<int> BubbleSort(List<int> items)
+{
+    int n = items.Count;
+    for (int i = 0; i < n; i++)
+    {
+        bool swapped = false;
+        for (int j = 0; j < n - i - 1; j++)  // Last i elements already sorted
+        {
+            if (items[j] > items[j + 1])
+            {
+                // Swap
+                int temp = items[j];
+                items[j] = items[j + 1];
+                items[j + 1] = temp;
+                swapped = true;
+            }
+        }
+        if (!swapped)
+            break;  // Early exit if already sorted
+    }
+    return items;
+}
 ```
 
 **Selection sort**
-```python
-def selection_sort(items: list) -> list:
-    n = len(items)
-    for i in range(n):
-        min_idx = i
-        for j in range(i + 1, n):
-            if items[j] < items[min_idx]:
-                min_idx = j
-        items[i], items[min_idx] = items[min_idx], items[i]  # at most n-1 swaps total
-    return items
+```csharp
+public List<int> SelectionSort(List<int> items)
+{
+    int n = items.Count;
+    for (int i = 0; i < n; i++)
+    {
+        int minIdx = i;
+        for (int j = i + 1; j < n; j++)
+        {
+            if (items[j] < items[minIdx])
+                minIdx = j;
+        }
+        // Swap — at most n-1 swaps total
+        int temp = items[i];
+        items[i] = items[minIdx];
+        items[minIdx] = temp;
+    }
+    return items;
+}
 ```
 
 **Insertion sort**
-```python
-def insertion_sort(items: list) -> list:
-    for i in range(1, len(items)):
-        key = items[i]
-        j = i - 1
-        while j >= 0 and items[j] > key:  # shift right to make room
-            items[j + 1] = items[j]
-            j -= 1
-        items[j + 1] = key                # insert in correct position
-    return items
+```csharp
+public List<int> InsertionSort(List<int> items)
+{
+    for (int i = 1; i < items.Count; i++)
+    {
+        int key = items[i];
+        int j = i - 1;
+        while (j >= 0 && items[j] > key)  // Shift right to make room
+        {
+            items[j + 1] = items[j];
+            j--;
+        }
+        items[j + 1] = key;  // Insert in correct position
+    }
+    return items;
+}
 ```
 
 **Comparison of all three**
-```python
-import random, time
+```csharp
+using System;using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
 
-data = list(range(5000, 0, -1))  # worst case: reverse sorted
+// Worst case: reverse sorted
+var data = Enumerable.Range(1, 5000).Reverse().ToList();
+var functions = new Dictionary<string, Func<List<int>, List<int>>>
+{
+    { nameof(BubbleSort), BubbleSort },
+    { nameof(SelectionSort), SelectionSort },
+    { nameof(InsertionSort), InsertionSort }
+};
 
-for fn in [bubble_sort, selection_sort, insertion_sort]:
-    arr = data.copy()
-    start = time.time()
-    fn(arr)
-    print(f"{fn.__name__}: {time.time() - start:.4f}s")
-# All ~same on reverse sorted; insertion sort wins on nearly-sorted
+foreach (var kvp in functions)
+{
+    var arr = new List<int>(data);
+    var sw = Stopwatch.StartNew();
+    kvp.Value(arr);
+    sw.Stop();
+    Console.WriteLine($"{kvp.Key}: {sw.Elapsed.TotalSeconds:F4}s");
+}
+// All ~same on reverse sorted; insertion sort wins on nearly-sorted
 ```
 
 ---

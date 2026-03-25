@@ -15,60 +15,90 @@ A client initiates requests; a server listens for them and sends back responses.
 ---
 
 ## The Code
-```python
-# ── Minimal HTTP server (Python stdlib, no frameworks) ────────────────────
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
+```csharp
+// ── Minimal HTTP server (ASP.NET Core) ──────────────────────────────────────────
+using Microsoft.AspNetCore.Http;
+using System.Text.Json;
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/ping":
-            body = json.dumps({"status": "ok"}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404)
-            self.end_headers()
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
 
-    def log_message(self, format, *args):
-        pass  # suppress default request logging
+app.MapGet("/ping", () =>
+{
+    var response = new { status = "ok" };
+    return Results.Json(response);
+});
 
-if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+app.MapFallback(context =>
+{
+    context.Response.StatusCode = 404;
+    return context.Response.CompleteAsync();
+});
+
+app.Run("http://0.0.0.0:8080");
 ```
-```python
-# ── Minimal HTTP client ───────────────────────────────────────────────────
-import httpx
+```csharp
+// ── Minimal HTTP client ──────────────────────────────────────────────
+using System.Net.Http;
+using System.Text.Json;
 
-def ping_server(base_url: str) -> dict:
-    response = httpx.get(f"{base_url}/ping", timeout=5.0)
-    response.raise_for_status()   # raises on 4xx/5xx
-    return response.json()
+public async Task<Dictionary<string, string>> PingServerAsync(string baseUrl)
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+    try
+    {
+        var response = await client.GetAsync($"{baseUrl}/ping");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync();
+        return JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+    }
+    catch (HttpRequestException ex)
+    {
+        throw new Exception($"Request failed: {ex.Message}");
+    }
+}
 
-result = ping_server("http://localhost:8080")
-print(result)  # {"status": "ok"}
+var result = await PingServerAsync("http://localhost:8080");
+Console.WriteLine(JsonSerializer.Serialize(result));  // {"status": "ok"}
 ```
-```python
-# ── Server-as-client: service-to-service communication ───────────────────
-# The "server" in one interaction becomes a "client" in the next.
-# This is the basis of microservice architectures.
+```csharp
+// ── Server-as-client: service-to-service communication ───────────────────────
+// The "server" in one interaction becomes a "client" in the next.
+// This is the basis of microservice architectures.
 
-import httpx
+using System.Net.Http;
+using System.Text.Json;
 
-# Order Service (acts as server to the browser, client to Inventory Service)
-def create_order(item_id: str, quantity: int) -> dict:
-    # This service is a client here — calling another server
-    inventory = httpx.get(
-        f"http://inventory-service/items/{item_id}",
-        timeout=3.0
-    ).json()
+public class OrderService
+{
+    private readonly HttpClient _client;
 
-    if inventory["stock"] < quantity:
-        raise ValueError("Insufficient stock")
+    public OrderService(HttpClient client) => _client = client;
 
-    return {"order_id": "ord_123", "item_id": item_id, "quantity": quantity}
+    public async Task<Dictionary<string, object>> CreateOrderAsync(string itemId, int quantity)
+    {
+        // This service is a client here — calling another server
+        var inventoryResponse = await _client.GetAsync(
+            $"http://inventory-service/items/{itemId}"
+        );
+        
+        if (!inventoryResponse.IsSuccessStatusCode)
+            throw new Exception($"Inventory service failed: {inventoryResponse.StatusCode}");
+
+        var inventoryJson = await inventoryResponse.Content.ReadAsStringAsync();
+        var inventory = JsonSerializer.Deserialize<Dictionary<string, object>>(inventoryJson);
+
+        if ((int)inventory["stock"] < quantity)
+            throw new InvalidOperationException("Insufficient stock");
+
+        return new Dictionary<string, object>
+        {
+            { "order_id", "ord_123" },
+            { "item_id", itemId },
+            { "quantity", quantity }
+        };
+    }
+}
 ```
 
 ---

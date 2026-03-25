@@ -18,103 +18,138 @@ The cache sits between your app and your DB. On a read, check cache first — if
 
 ## The Code
 
-```python
-# Cache-aside pattern (most common in production)
-import redis
-import json
-from typing import Optional
+```csharp
+// Cache-aside pattern (most common in production)
+using StackExchange.Redis;
+using System.Text.Json;
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+public class CacheAsidePattern
+{
+    private readonly IDatabase _redis;
+    private readonly IUserRepository _db;
 
-def get_user(user_id: int, db) -> Optional[dict]:
-    cache_key = f"user:{user_id}"
+    public async Task<User> GetUserAsync(int userId)
+    {
+        string cacheKey = $"user:{userId}";
 
-    # 1. Try cache first
-    cached = r.get(cache_key)
-    if cached:
-        return json.loads(cached)  # Cache hit
+        // 1. Try cache first
+        var cached = _redis.StringGet(cacheKey);
+        if (cached.HasValue)
+            return JsonSerializer.Deserialize<User>(cached.ToString())!;
 
-    # 2. Cache miss — fetch from DB
-    user = db.query("SELECT * FROM users WHERE id = %s", user_id)
-    if not user:
-        return None
+        // 2. Cache miss — fetch from DB
+        var user = await _db.GetUserAsync(userId);
+        if (user == null)
+            return null!;
 
-    # 3. Populate cache with TTL
-    r.setex(cache_key, 3600, json.dumps(user))  # 1 hour TTL
-    return user
+        // 3. Populate cache with TTL (1 hour)
+        _redis.StringSet(cacheKey, JsonSerializer.Serialize(user), TimeSpan.FromHours(1));
+        return user;
+    }
 
-def update_user(user_id: int, data: dict, db):
-    # 1. Write to DB first
-    db.execute("UPDATE users SET ... WHERE id = %s", user_id)
+    public async Task UpdateUserAsync(int userId, User data)
+    {
+        // 1. Write to DB first
+        await _db.UpdateUserAsync(userId, data);
 
-    # 2. Invalidate cache — don't update it, just delete
-    r.delete(f"user:{user_id}")
-    # Next read will repopulate from DB (lazy re-population)
+        // 2. Invalidate cache — don't update it, just delete
+        _redis.StringDelete($"user:{userId}");
+        // Next read will repopulate from DB (lazy re-population)
+    }
+}
 ```
 
-```python
-# Cache stampede prevention with probabilistic early expiration
-import time
-import random
-import json
-import redis
+```csharp
+// Cache stampede prevention with probabilistic early expiration (XFetch)
+using StackExchange.Redis;
+using System.Text.Json;
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+public class CacheStampedeProtection
+{
+    private readonly IDatabase _redis;
+    private readonly Random _random = new();
 
-def get_with_stampede_protection(key: str, ttl: int, fetch_fn, beta: float = 1.0):
-    """
-    XFetch algorithm: recompute slightly before expiry with probability
-    proportional to how close we are to expiration.
-    beta > 1 = more aggressive early recomputation (less stampede risk)
-    """
-    cached = r.get(key)
-    if cached:
-        data = json.loads(cached)
-        expiry = r.ttl(key)
-        remaining = expiry / ttl  # Fraction of TTL remaining
+    public T GetWithStampedeProtection<T>(
+        string key,
+        int ttl,
+        Func<T> fetchFn,
+        double beta = 1.0)
+    {
+        // XFetch algorithm: recompute slightly before expiry with probability
+        // proportional to how close we are to expiration.
+        // beta > 1 = more aggressive early recomputation (less stampede risk)
+        
+        var cached = _redis.StringGet(key);
+        if (cached.HasValue)
+        {
+            var data = JsonSerializer.Deserialize<T>(cached.ToString())!;
+            long expiry = _redis.KeyTimeToLive(key)?.TotalSeconds ?? 0;
+            double remaining = expiry > 0 ? (double)expiry / ttl : 0;
 
-        # Probabilistically decide to recompute early
-        if remaining > random.uniform(0, 1) ** (1 / beta):
-            return data  # Still fresh enough
+            // Probabilistically decide to recompute early
+            double randomValue = _random.NextDouble();
+            if (remaining > Math.Pow(randomValue, 1.0 / beta))
+                return data;  // Still fresh enough
+        }
 
-    # Recompute (either expired or early recompute triggered)
-    value = fetch_fn()
-    r.setex(key, ttl, json.dumps(value))
-    return value
+        // Recompute (either expired or early recompute triggered)
+        T value = fetchFn();
+        _redis.StringSet(key, JsonSerializer.Serialize(value), TimeSpan.FromSeconds(ttl));
+        return value;
+    }
+}
 ```
 
-```python
-# Consistent hashing for distributing keys across cache nodes
-import hashlib
-import bisect
+```csharp
+// Consistent hashing for distributing keys across cache nodes
+using System.Security.Cryptography;
+using System.Collections.Generic;
+using System.Linq;
 
-class ConsistentHashRing:
-    def __init__(self, nodes: list[str], virtual_nodes: int = 150):
-        self.ring = {}
-        self.sorted_keys = []
+public class ConsistentHashRing
+{
+    private readonly SortedDictionary<ulong, string> _ring = new();
+    private const int VirtualNodes = 150;
 
-        for node in nodes:
-            for i in range(virtual_nodes):
-                # Virtual nodes reduce hotspot risk
-                key = self._hash(f"{node}:{i}")
-                self.ring[key] = node
-                bisect.insort(self.sorted_keys, key)
+    public ConsistentHashRing(List<string> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            // Virtual nodes reduce hotspot risk
+            for (int i = 0; i < VirtualNodes; i++)
+            {
+                ulong key = Hash($"{node}:{i}");
+                _ring[key] = node;
+            }
+        }
+    }
 
-    def _hash(self, value: str) -> int:
-        return int(hashlib.md5(value.encode()).hexdigest(), 16)
+    private ulong Hash(string value)
+    {
+        using (var md5 = MD5.Create())
+        {
+            byte[] hash = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(value));
+            return System.BitConverter.ToUInt64(hash, 0);
+        }
+    }
 
-    def get_node(self, cache_key: str) -> str:
-        """Find which node should hold this cache key."""
-        if not self.ring:
-            return None
-        h = self._hash(cache_key)
-        idx = bisect.bisect(self.sorted_keys, h) % len(self.sorted_keys)
-        return self.ring[self.sorted_keys[idx]]
+    public string GetNode(string cacheKey)
+    {
+        // Find which node should hold this cache key
+        if (_ring.Count == 0)
+            return null!;
 
-# Usage
-ring = ConsistentHashRing(["cache-1", "cache-2", "cache-3"])
-print(ring.get_node("user:42"))       # → "cache-2" (deterministic)
-print(ring.get_node("user:43"))       # → "cache-1"
+        ulong hash = Hash(cacheKey);
+        var keys = _ring.Keys.Where(k => k >= hash).ToList();
+        ulong nodeKey = keys.Count > 0 ? keys.First() : _ring.Keys.First();
+        return _ring[nodeKey];
+    }
+}
+
+// Usage
+var ring = new ConsistentHashRing(new List<string> { "cache-1", "cache-2", "cache-3" });
+string node1 = ring.GetNode("user:42");   // Deterministic
+string node2 = ring.GetNode("user:43");
 ```
 
 ---

@@ -18,83 +18,132 @@ The standard proof technique is exchange argument: assume there's an optimal sol
 ## The Code
 
 **Activity selection — maximize non-overlapping intervals**
-```python
-def activity_selection(intervals: list) -> int:
-    # Sort by end time — finish earliest to leave most room for future activities
-    intervals.sort(key=lambda x: x[1])
-    count = 0
-    last_end = float('-inf')
-    for start, end in intervals:
-        if start >= last_end:          # no overlap with last selected activity
-            count += 1
-            last_end = end
-    return count
+```csharp
+public int ActivitySelection(List<(int, int)> intervals)
+{
+    // Sort by end time — finish earliest to leave most room for future activities
+    intervals.Sort((a, b) => a.Item2.CompareTo(b.Item2));
+    int count = 0;
+    int lastEnd = int.MinValue;
+    foreach (var (start, end) in intervals)
+    {
+        if (start >= lastEnd)    // no overlap with last selected activity
+        {
+            count++;
+            lastEnd = end;
+        }
+    }
+    return count;
+}
 ```
 
 **Merge intervals**
-```python
-def merge_intervals(intervals: list) -> list:
-    intervals.sort(key=lambda x: x[0])
-    merged = [intervals[0]]
-    for start, end in intervals[1:]:
-        if start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)   # extend current interval
-        else:
-            merged.append([start, end])
-    return merged
+```csharp
+public List<(int, int)> MergeIntervals(List<(int, int)> intervals)
+{
+    intervals.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+    var merged = new List<(int, int)> { intervals[0] };
+    for (int i = 1; i < intervals.Count; i++)
+    {
+        var (start, end) = intervals[i];
+        var (lastStart, lastEnd) = merged[merged.Count - 1];
+        if (start <= lastEnd)
+        {
+            merged[merged.Count - 1] = (lastStart, Math.Max(lastEnd, end));
+        }
+        else
+        {
+            merged.Add((start, end));
+        }
+    }
+    return merged;
+}
 ```
 
 **Jump game — can you reach the end?**
-```python
-def can_jump(nums: list) -> bool:
-    reach = 0
-    for i, jump in enumerate(nums):
-        if i > reach:
-            return False       # can't reach this index
-        reach = max(reach, i + jump)
-    return True
+```csharp
+public bool CanJump(int[] nums)
+{
+    int reach = 0;
+    for (int i = 0; i < nums.Length; i++)
+    {
+        if (i > reach)
+            return false;        // can't reach this index
+        reach = Math.Max(reach, i + nums[i]);
+    }
+    return true;
+}
 ```
 
 **Jump game II — minimum jumps to reach end**
-```python
-def jump(nums: list) -> int:
-    jumps = current_end = farthest = 0
-    for i in range(len(nums) - 1):
-        farthest = max(farthest, i + nums[i])
-        if i == current_end:           # exhausted current jump range
-            jumps += 1
-            current_end = farthest     # expand to the farthest reachable
-    return jumps
+```csharp
+public int Jump(int[] nums)
+{
+    int jumps = 0, currentEnd = 0, farthest = 0;
+    for (int i = 0; i < nums.Length - 1; i++)
+    {
+        farthest = Math.Max(farthest, i + nums[i]);
+        if (i == currentEnd)          // exhausted current jump range
+        {
+            jumps++;
+            currentEnd = farthest;    // expand to the farthest reachable
+        }
+    }
+    return jumps;
+}
 ```
 
 **Task scheduler — minimum time with cooldown**
-```python
-from collections import Counter
-
-def least_interval(tasks: list, n: int) -> int:
-    counts = Counter(tasks)
-    max_count = max(counts.values())
-    # number of tasks with the maximum frequency
-    max_count_tasks = sum(1 for c in counts.values() if c == max_count)
-    # fit tasks into (max_count-1) chunks of size (n+1), plus the last row
-    intervals = (max_count - 1) * (n + 1) + max_count_tasks
-    return max(intervals, len(tasks))  # can't be less than total tasks
+```csharp
+public int LeastInterval(char[] tasks, int n)
+{
+    var counts = new Dictionary<char, int>();
+    foreach (char task in tasks)
+    {
+        if (counts.ContainsKey(task))
+            counts[task]++;
+        else
+            counts[task] = 1;
+    }
+    int maxCount = 0;
+    foreach (var count in counts.Values)
+        maxCount = Math.Max(maxCount, count);
+    
+    // number of tasks with the maximum frequency
+    int maxCountTasks = 0;
+    foreach (var count in counts.Values)
+    {
+        if (count == maxCount)
+            maxCountTasks++;
+    }
+    // fit tasks into (max_count-1) chunks of size (n+1), plus the last row
+    int intervals = (maxCount - 1) * (n + 1) + maxCountTasks;
+    return Math.Max(intervals, tasks.Length); // can't be less than total tasks
+}
 ```
 
 **Fractional knapsack — greedily take highest value/weight ratio**
-```python
-def fractional_knapsack(items: list, capacity: int) -> float:
-    # items = [(value, weight), ...]
-    items.sort(key=lambda x: x[0] / x[1], reverse=True)  # sort by value density
-    total = 0.0
-    for value, weight in items:
-        if capacity >= weight:
-            total += value
-            capacity -= weight
-        else:
-            total += value * (capacity / weight)  # take fraction
-            break
-    return total
+```csharp
+public double FractionalKnapsack(List<(double, double)> items, double capacity)
+{
+    // items = [(value, weight), ...]
+    items.Sort((a, b) => (b.Item1 / b.Item2).CompareTo(a.Item1 / a.Item2));  // sort by value density
+    double total = 0.0;
+    foreach (var (value, weight) in items)
+    {
+        if (capacity >= weight)
+        {
+            total += value;
+            capacity -= weight;
+        }
+        else
+        {
+            total += value * (capacity / weight);  // take fraction
+            break;
+        }
+    }
+    return total;
+}
 ```
 
 ---

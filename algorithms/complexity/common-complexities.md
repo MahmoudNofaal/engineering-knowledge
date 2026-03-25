@@ -16,73 +16,120 @@ Most algorithms you'll encounter fall into one of seven complexity classes. They
 ## The Code
 
 **O(1) — Constant**
-```python
-def get_last(items: list):
-    return items[-1]  # index access, no matter the size
+```csharp
+public static int GetLast(List<int> items)
+{
+    return items[items.Count - 1];  // index access, no matter the size
+}
 ```
 
 **O(log n) — Logarithmic**
-```python
-# Input is halved each iteration — classic log n shape
-def binary_search(items: list, target: int) -> int:
-    lo, hi = 0, len(items) - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if items[mid] == target:
-            return mid
-        elif items[mid] < target:
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return -1
+```csharp
+// Input is halved each iteration — classic log n shape
+public static int BinarySearch(List<int> items, int target)
+{
+    int lo = 0, hi = items.Count - 1;
+    while (lo <= hi)
+    {
+        int mid = (lo + hi) / 2;
+        if (items[mid] == target)
+            return mid;
+        else if (items[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return -1;
+}
 ```
 
 **O(n) — Linear**
-```python
-def linear_search(items: list, target: int) -> int:
-    for i, val in enumerate(items):
-        if val == target:
-            return i
-    return -1
+```csharp
+public static int LinearSearch(List<int> items, int target)
+{
+    for (int i = 0; i < items.Count; i++)
+    {
+        if (items[i] == target)
+            return i;
+    }
+    return -1;
+}
 ```
 
 **O(n log n) — Linearithmic**
-```python
-# The best achievable for comparison-based sorting
-items = [3, 1, 4, 1, 5, 9, 2, 6]
-items.sort()  # Timsort: O(n log n) time, O(n) space
+```csharp
+// The best achievable for comparison-based sorting
+var items = new List<int> { 3, 1, 4, 1, 5, 9, 2, 6 };
+items.Sort();  // C#'s IntroSort: O(n log n) time, O(log n) space
 ```
 
 **O(n²) — Quadratic**
-```python
-# Every pair of elements is compared — nested loops
-def bubble_sort(items: list) -> list:
-    n = len(items)
-    for i in range(n):
-        for j in range(0, n - i - 1):
-            if items[j] > items[j + 1]:
-                items[j], items[j + 1] = items[j + 1], items[j]
-    return items
+```csharp
+// Every pair of elements is compared — nested loops
+public static void BubbleSort(List<int> items)
+{
+    int n = items.Count;
+    for (int i = 0; i < n; i++)
+    {
+        for (int j = 0; j < n - i - 1; j++)
+        {
+            if (items[j] > items[j + 1])
+            {
+                int temp = items[j];
+                items[j] = items[j + 1];
+                items[j + 1] = temp;
+            }
+        }
+    }
+}
 ```
 
 **O(2ⁿ) — Exponential**
-```python
-# Each call branches into two — tree doubles every level
-def fibonacci_naive(n: int) -> int:
-    if n <= 1:
-        return n
-    return fibonacci_naive(n - 1) + fibonacci_naive(n - 2)
+```csharp
+// Each call branches into two — tree doubles every level
+public static int FibonacciNaive(int n)
+{
+    if (n <= 1)
+        return n;
+    return FibonacciNaive(n - 1) + FibonacciNaive(n - 2);
+}
 ```
 
 **O(n!) — Factorial**
-```python
-from itertools import permutations
+```csharp
+// Generating all orderings — grows faster than anything else
+public static List<List<int>> AllPermutations(List<int> items)
+{
+    var result = new List<List<int>>();
+    GeneratePermutations(items, 0, result);
+    return result;
+}
 
-# Generating all orderings — grows faster than anything else
-def all_permutations(items: list) -> list:
-    return list(permutations(items))
-# n=10 → 3,628,800 permutations
-# n=15 → 1,307,674,368,000 permutations
+private static void GeneratePermutations(List<int> items, int start, List<List<int>> result)
+{
+    if (start == items.Count - 1)
+    {
+        result.Add(new List<int>(items));
+        return;
+    }
+    
+    for (int i = start; i < items.Count; i++)
+    {
+        // Swap
+        int temp = items[start];
+        items[start] = items[i];
+        items[i] = temp;
+        
+        GeneratePermutations(items, start + 1, result);
+        
+        // Swap back
+        temp = items[start];
+        items[start] = items[i];
+        items[i] = temp;
+    }
+}
+// n=10 → 3,628,800 permutations
+// n=15 → 1,307,674,368,000 permutations
 ```
 
 ---

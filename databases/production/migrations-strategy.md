@@ -18,32 +18,60 @@ A migration is a versioned, ordered, repeatable script that moves a database fro
 
 ## The Code
 
-**Migration tooling setup — Alembic (Python/SQLAlchemy)**
-```python
-# alembic.ini points to your database URL
-# alembic/env.py connects Alembic to your models
+**Migration tooling setup — Entity Framework Core (C#/Npgsql)**
+```csharp
+// appsettings.json configuration
+/*
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost;Port=5432;Database=mydb;User Id=user;Password=pass;"
+  }
+}
+*/
 
-# Generate a migration from model changes
-# alembic revision --autogenerate -m "add_user_phone_column"
+// DbContext setup
+public class AppDbContext : DbContext
+{
+    public DbSet<User> Users { get; set; }
+    public DbSet<Order> Orders { get; set; }
 
-# Generated migration file: alembic/versions/abc123_add_user_phone_column.py
-from alembic import op
-import sqlalchemy as sa
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
-def upgrade():
-    op.add_column("users", sa.Column("phone", sa.String(20), nullable=True))
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Model configuration
+        base.OnModelCreating(modelBuilder);
+    }
+}
 
-def downgrade():
-    op.drop_column("users", "phone")
+// Migration commands:
+// dotnet ef migrations add AddUserPhoneColumn
+// Generated migration file: Migrations/20240324000000_AddUserPhoneColumn.cs
 
-# Apply
-# alembic upgrade head
+public partial class AddUserPhoneColumn : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.AddColumn<string>(
+            name: "phone",
+            table: "users",
+            type: "character varying(20)",
+            nullable: true
+        );
+    }
 
-# Check current version
-# alembic current
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(
+            name: "phone",
+            table: "users"
+        );
+    }
+}
 
-# History
-# alembic history --verbose
+// Application
+// dotnet ef database update
+// dotnet ef migrations list
 ```
 
 **Expand-contract pattern — the safe way to rename a column**
@@ -69,35 +97,66 @@ ALTER TABLE users DROP COLUMN username;
 ```
 
 **Large table migrations — batched backfill**
-```python
-# Never: UPDATE large_table SET new_col = compute(old_col)
-# This locks the table for the duration of the update
+```csharp
+// Never: UPDATE large_table SET new_col = compute(old_col)
+// This locks the table for the duration of the update
 
-import psycopg2
+using Npgsql;
+using System;
+using System.Threading.Tasks;
 
-def backfill_in_batches(conn, batch_size=1000):
-    cursor = conn.cursor()
-    last_id = 0
+public class BatchedBackfillService
+{
+    private readonly string _connectionString;
+    private const int BatchSize = 1000;
 
-    while True:
-        cursor.execute("""
-            UPDATE orders
-            SET    total_cents = (total * 100)::int
-            WHERE  id > %s
-              AND  total_cents IS NULL
-            ORDER BY id
-            LIMIT  %s
-            RETURNING id
-        """, (last_id, batch_size))
+    public async Task BackfillInBatchesAsync()
+    {
+        using (var conn = new NpgsqlConnection(_connectionString))
+        {
+            await conn.OpenAsync();
+            long lastId = 0;
+            int batchCount = 0;
 
-        rows = cursor.fetchall()
-        if not rows:
-            break
+            while (true)
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                        UPDATE orders
+                        SET    total_cents = (total * 100)::int
+                        WHERE  id > @last_id
+                          AND  total_cents IS NULL
+                        ORDER BY id
+                        LIMIT  @batch_size
+                        RETURNING id";
+                    cmd.Parameters.AddWithValue("@last_id", lastId);
+                    cmd.Parameters.AddWithValue("@batch_size", BatchSize);
 
-        last_id = rows[-1][0]
-        conn.commit()   # commit each batch — releases lock between batches
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        bool hasRows = false;
+                        while (await reader.ReadAsync())
+                        {
+                            lastId = reader.GetInt64(0);
+                            hasRows = true;
+                        }
+                        if (!hasRows)
+                            break;  // No more rows to process
+                    }
+                }
 
-        time.sleep(0.05)   # brief pause — reduces replication lag pressure
+                // Commit each batch — releases lock between batches
+                conn.Close();
+                await Task.Delay(50);  // Brief pause — reduces replication lag pressure
+                await conn.OpenAsync();
+
+                batchCount++;
+                Console.WriteLine($"Backfilled batch {batchCount} (up to ID {lastId})");
+            }
+        }
+    }
+}
 ```
 
 **Zero-downtime index creation — Postgres**

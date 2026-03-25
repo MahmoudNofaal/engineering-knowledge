@@ -15,76 +15,140 @@ Instead of one database holding all rows, you divide the data across N databases
 ---
 
 ## The Code
-```python
-# ── Shard routing by hash of shard key ───────────────────────────────────
-import hashlib
-import psycopg2
+```csharp
+// ─ Shard routing by hash of shard key ─
+using System;
+using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
+using Npgsql;
 
-SHARD_COUNT = 4
+public class ShardRouter
+{
+    private const int ShardCount = 4;
+    private readonly Dictionary<int, NpgsqlConnection> _shardConnections = new();
 
-SHARD_CONNECTIONS = {
-    0: psycopg2.connect("postgresql://shard-0:5432/db"),
-    1: psycopg2.connect("postgresql://shard-1:5432/db"),
-    2: psycopg2.connect("postgresql://shard-2:5432/db"),
-    3: psycopg2.connect("postgresql://shard-3:5432/db"),
+    public ShardRouter()
+    {
+        for (int i = 0; i < ShardCount; i++)
+            _shardConnections[i] = new NpgsqlConnection($"Server=shard-{i};Port=5432;Database=db");
+    }
+
+    private int GetShard(string shardKey)
+    {
+        // Map a shard key to a shard index using consistent hashing
+        using (var md5 = MD5.Create())
+        {
+            byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(shardKey));
+            long digest = BitConverter.ToInt64(hash, 0);
+            return (int)(Math.Abs(digest) % ShardCount);
+        }
+    }
+
+    public NpgsqlConnection GetConnection(string shardKey)
+        => _shardConnections[GetShard(shardKey)];
+
+    public void Example()
+    {
+        // All data for user_id="u_42" always routes to the same shard
+        var conn = GetConnection("u_42");
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT * FROM orders WHERE user_id = @uid";
+            cmd.Parameters.AddWithValue("@uid", "u_42");
+            using (var reader = cmd.ExecuteReader())
+            {
+                // Process orders
+            }
+        }
+    }
+}
+```
+```csharp
+// ─ Scatter-gather: queries that must hit every shard ─
+// Avoid this pattern on hot paths — it's expensive and slow.
+// Example: "find all orders over $500 globally" — no single shard has the answer.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Npgsql;
+
+public class ScatterGatherQuery
+{
+    private readonly Dictionary<int, NpgsqlConnection> _shardConnections;
+    private const int ShardCount = 4;
+
+    public async Task<List<object>> ScatterGatherAsync(string query, object[] parameters)
+    {
+        var results = new List<object>();
+        var tasks = new Task<List<object>>[ShardCount];
+
+        for (int shardId = 0; shardId < ShardCount; shardId++)
+        {
+            int id = shardId;  // Capture for closure
+            tasks[id] = Task.Run(() => QueryShard(id, query, parameters));
+        }
+
+        await Task.WhenAll(tasks);
+
+        foreach (var shardResults in tasks.Select(t => t.Result))
+            results.AddRange(shardResults);
+
+        return results;
+    }
+
+    private async Task<List<object>> QueryShard(int shardId, string query, object[] parameters)
+    {
+        var results = new List<object>();
+        using (var conn = _shardConnections[shardId])
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = query;
+            for (int i = 0; i < parameters.Length; i++)
+                cmd.Parameters.AddWithValue($"@p{i}", parameters[i]);
+            
+            using (var reader = cmd.ExecuteReader())
+            {
+                while (reader.Read())
+                    results.Add(reader);
+            }
+        }
+        return results;
+    }
 }
 
-def get_shard(shard_key: str) -> int:
-    """Map a shard key to a shard index using consistent hashing."""
-    digest = int(hashlib.md5(shard_key.encode()).hexdigest(), 16)
-    return digest % SHARD_COUNT
-
-def get_connection(shard_key: str):
-    return SHARD_CONNECTIONS[get_shard(shard_key)]
-
-# All data for user_id="u_42" always routes to the same shard.
-conn = get_connection("u_42")
-with conn.cursor() as cur:
-    cur.execute("SELECT * FROM orders WHERE user_id = %s", ("u_42",))
-    orders = cur.fetchall()
+// This works. But at SHARD_COUNT=64, you're making 64 parallel DB calls per request.
+// Design your shard key so common queries don't need scatter-gather.
 ```
-```python
-# ── Scatter-gather: queries that must hit every shard ────────────────────
-# Avoid this pattern on hot paths — it's expensive and slow.
-# Example: "find all orders over $500 globally" — no single shard has the answer.
+```csharp
+// ─ Shard key selection analysis ─
+// Before committing to a shard key, model the access patterns.
 
-import concurrent.futures
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-def scatter_gather(query: str, params: tuple) -> list:
-    results = []
+public class ShardKeyAnalysis
+{
+    public static void AnalyzeAccessPatterns()
+    {
+        var accessPatterns = new List<(string query, string shardKey, string result)>
+        {
+            ("Get user's orders", "user_id", "single shard — ideal"),
+            ("Get order by order_id", "order_id", "single shard — ideal"),
+            ("Get all orders for merchant", "merchant_id", "single shard if merchant_id is shard key, else scatter-gather"),
+            ("Global revenue report", "user_id", "scatter-gather — unavoidable for analytics"),
+            ("Orders by date range", "user_id", "scatter-gather — date is not the shard key"),
+        };
 
-    def query_shard(shard_id: int) -> list:
-        with SHARD_CONNECTIONS[shard_id].cursor() as cur:
-            cur.execute(query, params)
-            return cur.fetchall()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=SHARD_COUNT) as executor:
-        futures = {executor.submit(query_shard, i): i for i in range(SHARD_COUNT)}
-        for future in concurrent.futures.as_completed(futures):
-            results.extend(future.result())
-
-    return results
-
-# This works. But at SHARD_COUNT=64, you're making 64 parallel DB calls per request.
-# Design your shard key so common queries don't need scatter-gather.
-```
-```python
-# ── Shard key selection analysis ──────────────────────────────────────────
-# Before committing to a shard key, model the access patterns.
-
-access_patterns = [
-    # (query description, shard key candidate, result)
-    ("Get user's orders",          "user_id",    "single shard — ideal"),
-    ("Get order by order_id",      "order_id",   "single shard — ideal"),
-    ("Get all orders for merchant","merchant_id","single shard if merchant_id is shard key, else scatter-gather"),
-    ("Global revenue report",      "user_id",    "scatter-gather — unavoidable for analytics"),
-    ("Orders by date range",       "user_id",    "scatter-gather — date is not the shard key"),
-]
-
-print(f"{'Query':<40} {'Shard Key':<15} {'Result'}")
-print("-" * 80)
-for pattern, key, result in access_patterns:
-    print(f"{pattern:<40} {key:<15} {result}")
+        Console.WriteLine($"{"Query",-40} {"Shard Key",-15} {"Result"}");
+        Console.WriteLine(new string('-', 80));
+        foreach (var (query, key, result) in accessPatterns)
+            Console.WriteLine($"{query,-40} {key,-15} {result}");
+    }
+}
 ```
 
 ---

@@ -18,111 +18,157 @@ The key implementation detail that trips people up: mark nodes visited when you 
 ## The Code
 
 **BFS — shortest path on unweighted graph**
-```python
-from collections import deque
+```csharp
+using System;
+using System.Collections.Generic;
 
-def bfs(graph: dict, start: int, end: int) -> int:
-    visited = {start}
-    queue = deque([(start, 0)])           # (node, distance)
-    while queue:
-        node, dist = queue.popleft()
-        if node == end:
-            return dist
-        for neighbor in graph[node]:
-            if neighbor not in visited:
-                visited.add(neighbor)     # mark on enqueue, not dequeue
-                queue.append((neighbor, dist + 1))
-    return -1                             # unreachable
+public int BFS(Dictionary<int, List<int>> graph, int start, int end)
+{
+    var visited = new HashSet<int> { start };
+    var queue = new Queue<(int node, int dist)>();
+    queue.Enqueue((start, 0));
+    while (queue.Count > 0)
+    {
+        var (node, dist) = queue.Dequeue();
+        if (node == end)
+            return dist;
+        foreach (int neighbor in graph[node])
+        {
+            if (!visited.Contains(neighbor))
+            {
+                visited.Add(neighbor);  // mark on enqueue, not dequeue
+                queue.Enqueue((neighbor, dist + 1));
+            }
+        }
+    }
+    return -1;  // unreachable
+}
 ```
 
 **BFS level order — process nodes layer by layer**
-```python
-from collections import deque
-
-def level_order(graph: dict, start: int) -> list[list]:
-    visited = {start}
-    queue = deque([start])
-    levels = []
-    while queue:
-        level_size = len(queue)           # snapshot: how many nodes are in this level
-        level = []
-        for _ in range(level_size):
-            node = queue.popleft()
-            level.append(node)
-            for neighbor in graph[node]:
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append(neighbor)
-        levels.append(level)
-    return levels
+```csharp
+public List<List<int>> LevelOrder(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int> { start };
+    var queue = new Queue<int>();
+    queue.Enqueue(start);
+    var levels = new List<List<int>>();
+    while (queue.Count > 0)
+    {
+        int levelSize = queue.Count;  // snapshot: how many nodes are in this level
+        var level = new List<int>();
+        for (int i = 0; i < levelSize; i++)
+        {
+            int node = queue.Dequeue();
+            level.Add(node);
+            foreach (int neighbor in graph[node])
+            {
+                if (!visited.Contains(neighbor))
+                {
+                    visited.Add(neighbor);
+                    queue.Enqueue(neighbor);
+                }
+            }
+        }
+        levels.Add(level);
+    }
+    return levels;
+}
 ```
 
 **BFS on a 2D grid — shortest path**
-```python
-from collections import deque
-
-def shortest_path_grid(grid: list, start: tuple, end: tuple) -> int:
-    rows, cols = len(grid), len(grid[0])
-    visited = {start}
-    queue = deque([(start[0], start[1], 0)])
-    while queue:
-        r, c, dist = queue.popleft()
-        if (r, c) == end:
-            return dist
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols \
-               and grid[nr][nc] != '#' \
-               and (nr, nc) not in visited:
-                visited.add((nr, nc))
-                queue.append((nr, nc, dist + 1))
-    return -1
+```csharp
+public int ShortestPathGrid(char[][] grid, (int, int) start, (int, int) end)
+{
+    int rows = grid.Length, cols = grid[0].Length;
+    var visited = new HashSet<(int, int)> { start };
+    var queue = new Queue<(int r, int c, int dist)>();
+    queue.Enqueue((start.Item1, start.Item2, 0));
+    int[][] directions = new int[][] { new[] { -1, 0 }, new[] { 1, 0 }, new[] { 0, -1 }, new[] { 0, 1 } };
+    while (queue.Count > 0)
+    {
+        var (r, c, dist) = queue.Dequeue();
+        if ((r, c) == end)
+            return dist;
+        foreach (int[] dir in directions)
+        {
+            int nr = r + dir[0], nc = c + dir[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols &&
+                grid[nr][nc] != '#' && !visited.Contains((nr, nc)))
+            {
+                visited.Add((nr, nc));
+                queue.Enqueue((nr, nc, dist + 1));
+            }
+        }
+    }
+    return -1;
+}
 ```
 
 **Multi-source BFS — start from multiple sources simultaneously**
-```python
-from collections import deque
+```csharp
+public void WallsAndGates(int[][] rooms)
+{
+    // Fill each empty room with distance to nearest gate (0).
+    // Gates are 0, walls are -1, empty rooms are INF.
+    int INF = int.MaxValue;
+    int rows = rooms.Length, cols = rooms[0].Length;
+    var queue = new Queue<(int, int)>();
+    for (int r = 0; r < rows; r++)
+    {
+        for (int c = 0; c < cols; c++)
+        {
+            if (rooms[r][c] == 0)
+                queue.Enqueue((r, c));  // seed all gates at once
+        }
+    }
 
-def walls_and_gates(rooms: list) -> None:
-    # Fill each empty room with distance to nearest gate (0).
-    # Gates are 0, walls are -1, empty rooms are INF.
-    INF = float('inf')
-    rows, cols = len(rooms), len(rooms[0])
-    queue = deque()
-    for r in range(rows):
-        for c in range(cols):
-            if rooms[r][c] == 0:
-                queue.append((r, c))          # seed all gates at once
-
-    while queue:
-        r, c = queue.popleft()
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and rooms[nr][nc] == INF:
-                rooms[nr][nc] = rooms[r][c] + 1
-                queue.append((nr, nc))
+    int[][] directions = new int[][] { new[] { -1, 0 }, new[] { 1, 0 }, new[] { 0, -1 }, new[] { 0, 1 } };
+    while (queue.Count > 0)
+    {
+        var (r, c) = queue.Dequeue();
+        foreach (int[] dir in directions)
+        {
+            int nr = r + dir[0], nc = c + dir[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && rooms[nr][nc] == INF)
+            {
+                rooms[nr][nc] = rooms[r][c] + 1;
+                queue.Enqueue((nr, nc));
+            }
+        }
+    }
+}
 ```
 
 **Word ladder — BFS on an implicit graph**
-```python
-from collections import deque
-
-def word_ladder(begin: str, end: str, word_list: set) -> int:
-    if end not in word_list:
-        return 0
-    queue = deque([(begin, 1)])
-    visited = {begin}
-    while queue:
-        word, steps = queue.popleft()
-        for i in range(len(word)):
-            for c in 'abcdefghijklmnopqrstuvwxyz':
-                candidate = word[:i] + c + word[i+1:]
-                if candidate == end:
-                    return steps + 1
-                if candidate in word_list and candidate not in visited:
-                    visited.add(candidate)
-                    queue.append((candidate, steps + 1))
-    return 0
+```csharp
+public int WordLadder(string begin, string end, HashSet<string> wordList)
+{
+    if (!wordList.Contains(end))
+        return 0;
+    var queue = new Queue<(string word, int steps)>();
+    queue.Enqueue((begin, 1));
+    var visited = new HashSet<string> { begin };
+    while (queue.Count > 0)
+    {
+        var (word, steps) = queue.Dequeue();
+        for (int i = 0; i < word.Length; i++)
+        {
+            for (char c = 'a'; c <= 'z'; c++)
+            {
+                var candidate = word.Substring(0, i) + c + word.Substring(i + 1);
+                if (candidate == end)
+                    return steps + 1;
+                if (wordList.Contains(candidate) && !visited.Contains(candidate))
+                {
+                    visited.Add(candidate);
+                    queue.Enqueue((candidate, steps + 1));
+                }
+            }
+        }
+    }
+    return 0;
+}
 ```
 
 ---

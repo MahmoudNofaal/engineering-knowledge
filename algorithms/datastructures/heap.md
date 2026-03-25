@@ -15,86 +15,136 @@ A heap is stored as an array, not a linked structure. For node at index i: left 
 
 ## The Code
 
-**Basic heap operations with heapq**
-```python
-import heapq
+**Basic heap operations using a PriorityQueue (C# 10+)**
+```csharp
+using System.Collections.Generic;
 
-heap = []
-heapq.heappush(heap, 5)
-heapq.heappush(heap, 2)
-heapq.heappush(heap, 8)
+var heap = new PriorityQueue<int, int>();
+heap.Enqueue(5, 5);
+heap.Enqueue(2, 2);
+heap.Enqueue(8, 8);
 
-print(heap[0])            # 2 — peek min, O(1)
-val = heapq.heappop(heap) # 2 — remove min, O(log n)
+Console.WriteLine(heap.Peek());  // 2 — peek min, O(1)
+int val = heap.Dequeue();        // 2 — remove min, O(log n)
 
-# Build a heap from an existing list — O(n), faster than n pushes
-items = [5, 2, 8, 1, 9]
-heapq.heapify(items)
+// For older C# or max-heap, use SortedDictionary
+var heapAlt = new SortedDictionary<int, List<int>>();
 ```
 
 **Max-heap — negate values**
-```python
-import heapq
+```csharp
+using System.Collections.Generic;
 
-max_heap = []
-for val in [5, 2, 8, 1, 9]:
-    heapq.heappush(max_heap, -val)  # store negated
+var maxHeap = new PriorityQueue<int, int>();
+var values = new[] { 5, 2, 8, 1, 9 };
+foreach (var val in values)
+    maxHeap.Enqueue(val, -val);  // store with negated priority for max-heap
 
-max_val = -heapq.heappop(max_heap)  # negate on retrieval
-print(max_val)  # 9
+int maxVal = maxHeap.Dequeue();  // retrieves with highest original value
+Console.WriteLine(maxVal);       // 9
 ```
 
 **Top-k largest elements — O(n log k)**
-```python
-import heapq
-
-def top_k(items: list, k: int) -> list:
-    # maintain a min-heap of size k
-    heap = items[:k]
-    heapq.heapify(heap)
-    for val in items[k:]:
-        if val > heap[0]:           # current val beats the smallest in top-k
-            heapq.heapreplace(heap, val)  # pop min, push val — O(log k)
-    return sorted(heap, reverse=True)
+```csharp
+public static List<int> TopK(List<int> items, int k)
+{
+    var heap = new PriorityQueue<int, int>();
+    
+    for (int i = 0; i < items.Count; i++)
+    {
+        if (i < k)
+        {
+            heap.Enqueue(items[i], items[i]);
+        }
+        else if (items[i] > heap.Peek())
+        {
+            heap.Dequeue();
+            heap.Enqueue(items[i], items[i]);
+        }
+    }
+    
+    var result = new List<int>();
+    while (heap.Count > 0)
+        result.Add(heap.Dequeue());
+    result.Sort((a, b) => b.CompareTo(a));
+    return result;
+}
 ```
 
 **Merge k sorted lists — O(n log k)**
-```python
-import heapq
-
-def merge_k_sorted(lists: list[list]) -> list:
-    result = []
-    # heap stores (value, list_index, element_index)
-    heap = [(lst[0], i, 0) for i, lst in enumerate(lists) if lst]
-    heapq.heapify(heap)
-    while heap:
-        val, i, j = heapq.heappop(heap)
-        result.append(val)
-        if j + 1 < len(lists[i]):
-            heapq.heappush(heap, (lists[i][j + 1], i, j + 1))
-    return result
+```csharp
+public static List<int> MergeKSorted(List<List<int>> lists)
+{
+    var result = new List<int>();
+    // heap stores (value, list_index, element_index)
+    var heap = new PriorityQueue<(int val, int i, int j), int>();
+    
+    for (int i = 0; i < lists.Count; i++)
+    {
+        if (lists[i].Count > 0)
+            heap.Enqueue((lists[i][0], i, 0), lists[i][0]);
+    }
+    
+    while (heap.Count > 0)
+    {
+        var (val, i, j) = heap.Dequeue();
+        result.Add(val);
+        
+        if (j + 1 < lists[i].Count)
+        {
+            int nextVal = lists[i][j + 1];
+            heap.Enqueue((nextVal, i, j + 1), nextVal);
+        }
+    }
+    return result;
+}
 ```
 
 **Running median with two heaps**
-```python
-import heapq
+```csharp
+public class MedianFinder
+{
+    private PriorityQueue<int, int> lo;   // max-heap (negated) — lower half
+    private PriorityQueue<int, int> hi;   // min-heap — upper half
 
-class MedianFinder:
-    def __init__(self):
-        self.lo = []   # max-heap (negated) — lower half
-        self.hi = []   # min-heap — upper half
+    public MedianFinder()
+    {
+        lo = new PriorityQueue<int, int>();
+        hi = new PriorityQueue<int, int>();
+    }
 
-    def add(self, num: int) -> None:
-        heapq.heappush(self.lo, -num)
-        # balance: lo top must be ≤ hi top
-        heapq.heappush(self.hi, -heapq.heappop(self.lo))
-        if len(self.hi) > len(self.lo):
-            heapq.heappush(self.lo, -heapq.heappop(self.hi))
+    public void Add(int num)
+    {
+        lo.Enqueue(num, -num);  // max-heap via negation
+        
+        // balance: lo top must be ≤ hi top
+        if (lo.Count > 0 && hi.Count > 0 && (-lo.Peek()) > hi.Peek())
+        {
+            int maxLo = lo.Dequeue();
+            int minHi = hi.Dequeue();
+            lo.Enqueue(minHi, -minHi);
+            hi.Enqueue(-maxLo, -maxLo);
+        }
+        
+        if (lo.Count > hi.Count + 1)
+        {
+            int val = lo.Dequeue();
+            hi.Enqueue(-val, -val);
+        }
+        if (hi.Count > lo.Count)
+        {
+            int val = hi.Dequeue();
+            lo.Enqueue(-val, -val);
+        }
+    }
 
-    def median(self) -> float:
-        if len(self.lo) > len(self.hi):
-            return -self.lo[0]
-        return (-self.lo[0] + self.hi[0]) / 2
+    public double Median()
+    {
+        if (lo.Count > hi.Count)
+            return -lo.Peek();
+        return (-lo.Peek() + hi.Peek()) / 2.0;
+    }
+}
 ```
 
 ---

@@ -15,43 +15,75 @@ Database scaling has two distinct axes: read scaling and write scaling. They req
 ---
 
 ## The Code
-```python
-# ── Read replica routing — most common first scaling step ─────────────────
-import random
-import psycopg2
+```csharp
+// ── Read replica routing — most common first scaling step ─────────────────
+using Npgsql;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-class DatabasePool:
-    def __init__(self, primary_dsn: str, replica_dsns: list[str]):
-        self.primary  = psycopg2.connect(primary_dsn)
-        self.replicas = [psycopg2.connect(dsn) for dsn in replica_dsns]
+public class DatabasePool
+{
+    private readonly NpgsqlConnection _primary;
+    private readonly List<NpgsqlConnection> _replicas;
+    private readonly Random _random = new();
 
-    def write_conn(self):
-        """All writes go to primary — always."""
-        return self.primary
+    public DatabasePool(string primaryDsn, List<string> replicaDsns)
+    {
+        _primary = new NpgsqlConnection(primaryDsn);
+        _primary.Open();
+        _replicas = replicaDsns.Select(dsn => 
+        {
+            var conn = new NpgsqlConnection(dsn);
+            conn.Open();
+            return conn;
+        }).ToList();
+    }
 
-    def read_conn(self):
-        """Reads distributed across replicas. Primary handles reads only on fallback."""
-        if self.replicas:
-            return random.choice(self.replicas)   # simple random; use least-connections in prod
-        return self.primary                        # fallback if no replicas yet
+    public NpgsqlConnection WriteConn()
+    {
+        // All writes go to primary — always.
+        return _primary;
+    }
 
-pool = DatabasePool(
-    primary_dsn  = "postgresql://primary:5432/db",
-    replica_dsns = [
-        "postgresql://replica-1:5432/db",
-        "postgresql://replica-2:5432/db",
-    ]
-)
+    public NpgsqlConnection ReadConn()
+    {
+        // Reads distributed across replicas. Primary handles reads only on fallback.
+        if (_replicas.Count > 0)
+            return _replicas[_random.Next(_replicas.Count)];   // simple random; use least-connections in prod
+        return _primary;                        // fallback if no replicas yet
+    }
+}
 
-# Write: goes to primary
-with pool.write_conn().cursor() as cur:
-    cur.execute("INSERT INTO orders (user_id, total) VALUES (%s, %s)", (42, 99.99))
-    pool.write_conn().commit()
+var pool = new DatabasePool(
+    primaryDsn: "Server=primary;Port=5432;Database=db;",
+    replicaDsns: new List<string>
+    {
+        "Server=replica-1;Port=5432;Database=db;",
+        "Server=replica-2;Port=5432;Database=db;",
+    }
+);
 
-# Read: goes to a replica
-with pool.read_conn().cursor() as cur:
-    cur.execute("SELECT * FROM orders WHERE user_id = %s", (42,))
-    rows = cur.fetchall()
+// Write: goes to primary
+using (var cmd = pool.WriteConn().CreateCommand())
+{
+    cmd.CommandText = "INSERT INTO orders (user_id, total) VALUES (@userId, @total)";
+    cmd.Parameters.AddWithValue("@userId", 42);
+    cmd.Parameters.AddWithValue("@total", 99.99);
+    cmd.ExecuteNonQuery();
+}
+
+// Read: goes to a replica
+using (var cmd = pool.ReadConn().CreateCommand())
+{
+    cmd.CommandText = "SELECT * FROM orders WHERE user_id = @userId";
+    cmd.Parameters.AddWithValue("@userId", 42);
+    var reader = cmd.ExecuteReader();
+    while (reader.Read())
+    {
+        // Process row
+    }
+}
 ```
 ```sql
 -- ── Connection pooling — mandatory before any other scaling step ──────────
@@ -68,32 +100,62 @@ with pool.read_conn().cursor() as cur:
 -- max_client_conn = 10000          ← app can open 10K connections to PgBouncer
 -- default_pool_size = 20           ← PgBouncer uses only 20 real DB connections
 ```
-```python
-# ── CQRS: separate read and write models ──────────────────────────────────
-# Write model: normalized, consistent, ACID
-# Read model: denormalized, optimized for query patterns, eventually consistent
+```csharp
+// ── CQRS: separate read and write models ──────────────────────────────────
+// Write model: normalized, consistent, ACID
+// Read model: denormalized, optimized for query patterns, eventually consistent
 
-# Write side — strict, normalized
-def place_order(user_id: int, items: list[dict]) -> str:
-    with pool.write_conn().cursor() as cur:
-        cur.execute("INSERT INTO orders (user_id) VALUES (%s) RETURNING id", (user_id,))
-        order_id = cur.fetchone()[0]
-        for item in items:
-            cur.execute(
-                "INSERT INTO order_items (order_id, product_id, qty) VALUES (%s, %s, %s)",
-                (order_id, item["product_id"], item["qty"])
-            )
-        pool.write_conn().commit()
-    # Publish event → async worker updates the read model
-    publish_event("order.created", {"order_id": order_id, "user_id": user_id})
-    return order_id
+using System.Collections.Generic;
+using Npgsql;
 
-# Read side — denormalized, fast
-def get_order_summary(order_id: str) -> dict:
-    # This table is pre-joined and pre-aggregated — single fast read
-    with pool.read_conn().cursor() as cur:
-        cur.execute("SELECT * FROM order_summaries WHERE order_id = %s", (order_id,))
-        return dict(zip([d[0] for d in cur.description], cur.fetchone()))
+// Write side — strict, normalized
+public string PlaceOrder(int userId, List<Dictionary<string, object>> items)
+{
+    string orderId;
+    using (var cmd = pool.WriteConn().CreateCommand())
+    {
+        cmd.CommandText = "INSERT INTO orders (user_id) VALUES (@userId) RETURNING id";
+        cmd.Parameters.AddWithValue("@userId", userId);
+        orderId = cmd.ExecuteScalar()?.ToString();
+    }
+
+    foreach (var item in items)
+    {
+        using (var cmd = pool.WriteConn().CreateCommand())
+        {
+            cmd.CommandText = "INSERT INTO order_items (order_id, product_id, qty) VALUES (@orderId, @productId, @qty)";
+            cmd.Parameters.AddWithValue("@orderId", orderId);
+            cmd.Parameters.AddWithValue("@productId", item["product_id"]);
+            cmd.Parameters.AddWithValue("@qty", item["qty"]);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // Publish event → async worker updates the read model
+    PublishEvent("order.created", new { order_id = orderId, user_id = userId });
+    return orderId;
+}
+
+// Read side — denormalized, fast
+public Dictionary<string, object> GetOrderSummary(string orderId)
+{
+    // This table is pre-joined and pre-aggregated — single fast read
+    var summary = new Dictionary<string, object>();
+    using (var cmd = pool.ReadConn().CreateCommand())
+    {
+        cmd.CommandText = "SELECT * FROM order_summaries WHERE order_id = @orderId";
+        cmd.Parameters.AddWithValue("@orderId", orderId);
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                for (int i = 0; i < reader.FieldCount; i++)
+                    summary[reader.GetName(i)] = reader.GetValue(i);
+            }
+        }
+    }
+    return summary;
+}
 ```
 
 ---

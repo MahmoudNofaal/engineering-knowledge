@@ -17,42 +17,51 @@ System design is how you think through the big picture before writing code. Inst
 ## The Code
 
 There's no single code block for system design itself — it's a thinking process. But here's what a basic design decision looks like when translated into structure:
-```python
-# Example: Choosing between sync vs async communication for two services
+```csharp
+// Example: Choosing between sync vs async communication for two services
 
-# SYNC — Service A waits for Service B to respond
-# Use when: you need the result immediately
-import httpx
+// SYNC — Service A waits for Service B to respond
+// Use when: you need the result immediately
+using System.Net.Http;
 
-def get_user_profile(user_id: str) -> dict:
-    response = httpx.get(f"http://user-service/users/{user_id}")
-    response.raise_for_status()
-    return response.json()
+public async Task<Dictionary<string, object>> GetUserProfileAsync(string userId)
+{
+    using var client = new HttpClient();
+    var response = await client.GetAsync($"http://user-service/users/{userId}");
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+}
 
-# ASYNC — Service A fires a message and moves on
-# Use when: you don't need the result right now (e.g., send welcome email)
-import boto3
+// ASYNC — Service A fires a message and moves on
+// Use when: you don't need the result right now (e.g., send welcome email)
+using Amazon.SQS;
+using Amazon.SQS.Model;
 
-def trigger_welcome_email(user_id: str) -> None:
-    sqs = boto3.client("sqs")
-    sqs.send_message(
-        QueueUrl="https://sqs.us-east-1.amazonaws.com/123/welcome-emails",
-        MessageBody=user_id
-    )
+public async Task TriggerWelcomeEmailAsync(string userId)
+{
+    var sqs = new AmazonSQSClient();
+    var request = new SendMessageRequest
+    {
+        QueueUrl = "https://sqs.us-east-1.amazonaws.com/123/welcome-emails",
+        MessageBody = userId
+    };
+    await sqs.SendMessageAsync(request);
+}
 ```
-```python
-# Example: Back-of-napkin capacity estimation (a core system design skill)
+```csharp
+// Example: Back-of-napkin capacity estimation (a core system design skill)
 
-DAU = 10_000_000          # daily active users
-reads_per_user = 20       # average reads per day
-writes_per_user = 2       # average writes per day
+long DAU = 10_000_000;          // daily active users
+int reads_per_user = 20;        // average reads per day
+int writes_per_user = 2;        // average writes per day
 
-read_rps  = (DAU * reads_per_user)  / 86_400   # ~2,315 reads/sec
-write_rps = (DAU * writes_per_user) / 86_400   # ~231 writes/sec
+double read_rps = (DAU * reads_per_user) / 86_400.0;    // ~2,315 reads/sec
+double write_rps = (DAU * writes_per_user) / 86_400.0;  // ~231 writes/sec
 
-# This tells you: read-heavy system, cache aggressively, replicas matter more than write throughput
-print(f"Read RPS:  {read_rps:.0f}")
-print(f"Write RPS: {write_rps:.0f}")
+// This tells you: read-heavy system, cache aggressively, replicas matter more than write throughput
+Console.WriteLine($"Read RPS:  {read_rps:F0}");
+Console.WriteLine($"Write RPS: {write_rps:F0}");
 ```
 
 ---

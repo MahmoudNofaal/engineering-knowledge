@@ -15,56 +15,57 @@ Back-of-envelope estimation is about getting the right order of magnitude, not t
 ---
 
 ## The Code
-```python
-# ── Core estimation template ──────────────────────────────────────────────
+```csharp
+// ── Core estimation template ──────────────────────────────────────────────
 
-DAU            = 100_000_000   # 100M daily active users
-reads_per_day  = 10            # average reads per user per day
-writes_per_day = 1             # average writes per user per day
-avg_object_kb  = 250           # average size of one write (e.g., a tweet + metadata)
-retention_yrs  = 5
+long DAU = 100_000_000;             // 100M daily active users
+int reads_per_day = 10;             // average reads per user per day
+int writes_per_day = 1;             // average writes per user per day
+int avg_object_kb = 250;            // average size of one write (e.g., a tweet + metadata)
+int retention_yrs = 5;
 
-SECONDS_PER_DAY = 86_400
+int SECONDS_PER_DAY = 86_400;
 
-# ── Throughput ────────────────────────────────────────────────────────────
-read_rps  = (DAU * reads_per_day)  / SECONDS_PER_DAY
-write_rps = (DAU * writes_per_day) / SECONDS_PER_DAY
+// ── Throughput ────────────────────────────────────────────────────────────
+double read_rps = (DAU * reads_per_day) / (double)SECONDS_PER_DAY;
+double write_rps = (DAU * writes_per_day) / (double)SECONDS_PER_DAY;
 
-# ── Storage ───────────────────────────────────────────────────────────────
-writes_per_day_total = DAU * writes_per_day
-storage_5yr_tb = (writes_per_day_total * avg_object_kb * 365 * retention_yrs) / 1e9
+// ── Storage ───────────────────────────────────────────────────────────────
+long writes_per_day_total = DAU * writes_per_day;
+double storage_5yr_tb = (writes_per_day_total * avg_object_kb * 365 * retention_yrs) / 1e9;
 
-# ── Bandwidth ─────────────────────────────────────────────────────────────
-read_bandwidth_gbps  = (read_rps  * avg_object_kb * 1024) / 1e9
-write_bandwidth_gbps = (write_rps * avg_object_kb * 1024) / 1e9
+// ── Bandwidth ─────────────────────────────────────────────────────────────
+double read_bandwidth_gbps = (read_rps * avg_object_kb * 1024) / 1e9;
+double write_bandwidth_gbps = (write_rps * avg_object_kb * 1024) / 1e9;
 
-print(f"Read RPS:          {read_rps:>10,.0f}")
-print(f"Write RPS:         {write_rps:>10,.0f}")
-print(f"Storage (5yr TB):  {storage_5yr_tb:>10,.1f}")
-print(f"Read bandwidth:    {read_bandwidth_gbps:>10.2f} Gbps")
-print(f"Write bandwidth:   {write_bandwidth_gbps:>10.2f} Gbps")
+Console.WriteLine($"Read RPS:          {read_rps,10:F0}");
+Console.WriteLine($"Write RPS:         {write_rps,10:F0}");
+Console.WriteLine($"Storage (5yr TB):  {storage_5yr_tb,10:F1}");
+Console.WriteLine($"Read bandwidth:    {read_bandwidth_gbps,10:F2} Gbps");
+Console.WriteLine($"Write bandwidth:   {write_bandwidth_gbps,10:F2} Gbps");
 ```
-```python
-# ── Memory sizing: how much can one cache server hold? ────────────────────
+```csharp
+// ── Memory sizing: how much can one cache server hold? ────────────────────
 
-cache_server_ram_gb  = 72       # typical cache node
-object_size_bytes    = 500
-objects_per_server   = (cache_server_ram_gb * 1e9) / object_size_bytes
+long cache_server_ram_gb = 72;      // typical cache node
+int object_size_bytes = 500;
+long objects_per_server = (long)(cache_server_ram_gb * 1e9) / object_size_bytes;
 
-print(f"Objects per cache node: {objects_per_server:,.0f}")
-# Use this to decide: do you need a cache cluster or is one node enough?
+Console.WriteLine($"Objects per cache node: {objects_per_server:N0}");
+// Use this to decide: do you need a cache cluster or is one node enough?
 ```
-```python
-# ── Quick powers-of-2 / time cheat sheet (memorise these) ────────────────
-units = {
-    "1 KB":           1_000,
-    "1 MB":           1_000_000,
-    "1 GB":           1_000_000_000,
-    "1 TB":           1_000_000_000_000,
-    "Seconds/day":    86_400,
-    "Seconds/month":  2_592_000,
-    "Seconds/year":   31_536_000,
-}
+```csharp
+// ── Quick powers-of-2 / time cheat sheet (memorise these) ────────────────
+var units = new Dictionary<string, long>
+{
+    { "1 KB",           1_000 },
+    { "1 MB",           1_000_000 },
+    { "1 GB",           1_000_000_000 },
+    { "1 TB",           1_000_000_000_000 },
+    { "Seconds/day",    86_400 },
+    { "Seconds/month",  2_592_000 },
+    { "Seconds/year",   31_536_000 },
+};
 ```
 
 ---

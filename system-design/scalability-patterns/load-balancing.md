@@ -15,115 +15,180 @@ A load balancer sits between the client and your fleet of servers. Every incomin
 ---
 
 ## The Code
-```python
-# ── Load balancing algorithms — implemented from scratch ──────────────────
-import itertools
-import random
-import time
-from dataclasses import dataclass, field
+```csharp
+// ── Load balancing algorithms — implemented from scratch ──────────────────
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-@dataclass
-class Backend:
-    host:         str
-    weight:       int  = 1
-    active_conns: int  = 0
-    healthy:      bool = True
-
-class RoundRobinBalancer:
-    """Equal distribution. Best when all backends are identical."""
-    def __init__(self, backends: list[Backend]):
-        self._pool  = [b for b in backends if b.healthy]
-        self._cycle = itertools.cycle(self._pool)
-
-    def next(self) -> Backend | None:
-        healthy = [b for b in self._pool if b.healthy]
-        if not healthy:
-            return None
-        return next(self._cycle)
-
-class LeastConnectionsBalancer:
-    """Routes to the server with fewest active connections.
-       Best when requests have variable processing time."""
-    def __init__(self, backends: list[Backend]):
-        self._pool = backends
-
-    def next(self) -> Backend | None:
-        healthy = [b for b in self._pool if b.healthy]
-        if not healthy:
-            return None
-        return min(healthy, key=lambda b: b.active_conns)
-
-class WeightedRoundRobinBalancer:
-    """Backend with weight=3 gets 3x the traffic of weight=1.
-       Use when backends have different capacities."""
-    def __init__(self, backends: list[Backend]):
-        self._pool = [b for b in backends for _ in range(b.weight) if b.healthy]
-        self._cycle = itertools.cycle(self._pool)
-
-    def next(self) -> Backend | None:
-        if not self._pool:
-            return None
-        return next(self._cycle)
-
-# ── Usage ─────────────────────────────────────────────────────────────────
-backends = [
-    Backend("web-1:8080", weight=3),  # bigger instance
-    Backend("web-2:8080", weight=1),
-    Backend("web-3:8080", weight=1, healthy=False),  # down for maintenance
-]
-
-lb = LeastConnectionsBalancer(backends)
-for _ in range(5):
-    chosen = lb.next()
-    print(f"Route to: {chosen.host}")
-```
-```python
-# ── Health checking loop ───────────────────────────────────────────────────
-import httpx
-import threading
-
-def health_check_loop(backends: list[Backend], interval_s: int = 5) -> None:
-    """Runs in background; marks backends healthy/unhealthy based on /health."""
-    while True:
-        for backend in backends:
-            try:
-                r = httpx.get(f"http://{backend.host}/health", timeout=2.0)
-                backend.healthy = r.status_code == 200
-            except Exception:
-                backend.healthy = False   # timeout or connection refused
-            print(f"{backend.host}: {'✓' if backend.healthy else '✗'}")
-        time.sleep(interval_s)
-
-# In production this is handled by the load balancer itself (nginx, HAProxy, ALB).
-# Shown here to make the concept explicit.
-```
-```nginx
-# ── nginx: real load balancer config ──────────────────────────────────────
-# /etc/nginx/nginx.conf
-
-upstream app_servers {
-    least_conn;                      # algorithm: least connections
-
-    server web-1:8080 weight=3;
-    server web-2:8080 weight=1;
-    server web-3:8080 weight=1 backup;  # only used if primary servers are down
-
-    keepalive 32;                    # reuse upstream connections — critical at scale
+public class Backend
+{
+    public string Host { get; set; }
+    public int Weight { get; set; } = 1;
+    public int ActiveConns { get; set; } = 0;
+    public bool Healthy { get; set; } = true;
 }
 
-server {
-    listen 443 ssl;
+public class RoundRobinBalancer
+{
+    // Equal distribution. Best when all backends are identical.
+    private readonly List<Backend> _pool;
+    private int _currentIndex = 0;
 
-    ssl_certificate     /etc/ssl/cert.pem;
-    ssl_certificate_key /etc/ssl/key.pem;
-    # TLS terminates HERE — backends receive plain HTTP internally
+    public RoundRobinBalancer(List<Backend> backends)
+    {
+        _pool = backends.Where(b => b.Healthy).ToList();
+    }
 
-    location / {
-        proxy_pass         http://app_servers;
-        proxy_set_header   X-Real-IP $remote_addr;  # preserve original client IP
-        proxy_set_header   Host      $host;
+    public Backend Next()
+    {
+        var healthy = _pool.Where(b => b.Healthy).ToList();
+        if (healthy.Count == 0)
+            return null;
+        var selected = healthy[_currentIndex % healthy.Count];
+        _currentIndex++;
+        return selected;
     }
 }
+
+public class LeastConnectionsBalancer
+{
+    // Routes to the server with fewest active connections.
+    // Best when requests have variable processing time.
+    private readonly List<Backend> _pool;
+
+    public LeastConnectionsBalancer(List<Backend> backends)
+    {
+        _pool = backends;
+    }
+
+    public Backend Next()
+    {
+        var healthy = _pool.Where(b => b.Healthy).ToList();
+        if (healthy.Count == 0)
+            return null;
+        return healthy.OrderBy(b => b.ActiveConns).First();
+    }
+}
+
+public class WeightedRoundRobinBalancer
+{
+    // Backend with weight=3 gets 3x the traffic of weight=1.
+    // Use when backends have different capacities.
+    private readonly List<Backend> _pool;
+    private int _currentIndex = 0;
+
+    public WeightedRoundRobinBalancer(List<Backend> backends)
+    {
+        _pool = new List<Backend>();
+        foreach (var b in backends.Where(b => b.Healthy))
+        {
+            for (int i = 0; i < b.Weight; i++)
+                _pool.Add(b);
+        }
+    }
+
+    public Backend Next()
+    {
+        if (_pool.Count == 0)
+            return null;
+        var selected = _pool[_currentIndex % _pool.Count];
+        _currentIndex++;
+        return selected;
+    }
+}
+
+// ── Usage ─────────────────────────────────────────────────────────────────
+var backends = new List<Backend>
+{
+    new Backend { Host = "web-1:8080", Weight = 3 },  // bigger instance
+    new Backend { Host = "web-2:8080", Weight = 1 },
+    new Backend { Host = "web-3:8080", Weight = 1, Healthy = false },  // down for maintenance
+};
+
+var lb = new LeastConnectionsBalancer(backends);
+for (int i = 0; i < 5; i++)
+{
+    var chosen = lb.Next();
+    Console.WriteLine($"Route to: {chosen.Host}");
+}
+```
+```csharp
+// ── Health checking loop ──
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+
+public class HealthCheckService
+{
+    private readonly List<Backend> _backends;
+    private readonly HttpClient _httpClient = new();
+
+    public HealthCheckService(List<Backend> backends)
+    {
+        _backends = backends;
+    }
+
+    public async Task HealthCheckLoopAsync(int intervalSeconds = 5)
+    {
+        // Runs as background task; marks backends healthy/unhealthy based on /health
+        while (true)
+        {
+            foreach (var backend in _backends)
+            {
+                try
+                {
+                    var response = await _httpClient.GetAsync(
+                        $"http://{backend.Host}/health",
+                        HttpCompletionOption.ResponseContentRead
+                    );
+                    backend.Healthy = response.StatusCode == System.Net.HttpStatusCode.OK;
+                }
+                catch (Exception)
+                {
+                    backend.Healthy = false;  // timeout or connection refused
+                }
+                Console.WriteLine($"{backend.Host}: {(backend.Healthy ? "✓" : "✗")}");
+            }
+            await Task.Delay(intervalSeconds * 1000);
+        }
+    }
+}
+// In production this is handled by the load balancer itself (nginx, HAProxy, ALB).
+// Shown here to make the concept explicit.
+```
+```csharp
+// ── nginx: real load balancer config ──────────────────────────────────────
+// /etc/nginx/nginx.conf reference — nginx configuration shown as comments
+
+// C# YARP (Yet Another Reverse Proxy) equivalent in appsettings.json:
+/*
+{
+  "ReverseProxy": {
+    "Clusters": [
+      {
+        "ClusterId": "appCluster",
+        "LoadBalancingPolicy": "LeastRequests",
+        "Destinations": {
+          "app1": { "Address": "http://web-1:8080" },
+          "app2": { "Address": "http://web-2:8080" },
+          "app3": { "Address": "http://web-3:8080" }
+        }
+      }
+    ],
+    "Routes": [
+      {
+        "RouteId": "api",
+        "ClusterId": "appCluster",
+        "Match": { "Path": "/{**catch-all}" }
+      }
+    ]
+  }
+}
+*/
 ```
 
 ---

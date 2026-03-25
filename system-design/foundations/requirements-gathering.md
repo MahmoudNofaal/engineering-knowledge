@@ -15,48 +15,59 @@ Requirements gathering is how you turn a vague prompt ("design Instagram") into 
 ---
 
 ## The Code
-```python
-# No code for requirements gathering itself — but here's a structured
-# checklist you can internalize and run through mentally or on a whiteboard.
+```csharp
+// No code for requirements gathering itself — but here's a structured
+// checklist you can internalize and run through mentally or on a whiteboard.
 
-requirements = {
-    "functional": [
-        "What are the core user actions? (create, read, update, delete what?)",
-        "What does the system NOT need to do? (explicitly out of scope)",
-        "Are there any actors other than end users? (admins, third-party services)",
-    ],
-    "non_functional": [
-        "How many daily active users?",
-        "What is the read/write ratio?",
-        "What latency is acceptable? (p99, not just average)",
-        "What availability is required? (99.9% = 8.7hrs downtime/yr)",
-        "Is the data consistency model eventual or strong?",
-        "What is the expected data volume? (storage over 5 years)",
-        "Is the system read-heavy, write-heavy, or balanced?",
-    ],
-    "constraints": [
-        "Are there regulatory or compliance requirements? (GDPR, HIPAA)",
-        "Is this greenfield or does it integrate with existing systems?",
-        "Any hard technology constraints from the business?",
-    ]
-}
+var requirements = new Dictionary<string, List<string>>
+{
+    {
+        "functional", new List<string>
+        {
+            "What are the core user actions? (create, read, update, delete what?)",
+            "What does the system NOT need to do? (explicitly out of scope)",
+            "Are there any actors other than end users? (admins, third-party services)",
+        }
+    },
+    {
+        "non_functional", new List<string>
+        {
+            "How many daily active users?",
+            "What is the read/write ratio?",
+            "What latency is acceptable? (p99, not just average)",
+            "What availability is required? (99.9% = 8.7hrs downtime/yr)",
+            "Is the data consistency model eventual or strong?",
+            "What is the expected data volume? (storage over 5 years)",
+            "Is the system read-heavy, write-heavy, or balanced?",
+        }
+    },
+    {
+        "constraints", new List<string>
+        {
+            "Are there regulatory or compliance requirements? (GDPR, HIPAA)",
+            "Is this greenfield or does it integrate with existing systems?",
+            "Any hard technology constraints from the business?",
+        }
+    }
+};
 ```
-```python
-# Translating gathered requirements into design inputs
+```csharp
+// Translating gathered requirements into design inputs
 
-reqs = {
-    "dau": 50_000_000,
-    "read_write_ratio": "100:1",
-    "availability": "99.99%",     # ~52 minutes downtime/year — needs redundancy everywhere
-    "latency_p99_ms": 300,
-    "retention_years": 5,
-    "avg_post_size_kb": 500,
-}
+var reqs = new Dictionary<string, object>
+{
+    { "dau", 50_000_000 },
+    { "read_write_ratio", "100:1" },
+    { "availability", "99.99%" },         // ~52 minutes downtime/year — needs redundancy everywhere
+    { "latency_p99_ms", 300 },
+    { "retention_years", 5 },
+    { "avg_post_size_kb", 500 },
+};
 
-writes_per_day = reqs["dau"] * 0.01          # ~500K writes/day (1% of users post)
-storage_5yr_gb = (writes_per_day * reqs["avg_post_size_kb"] * 365 * reqs["retention_years"]) / 1e6
-print(f"Storage needed (5yr): {storage_5yr_gb:,.0f} GB")
-# This single output already tells you: object storage is mandatory, not optional.
+long writes_per_day = (long)(Convert.ToInt64(reqs["dau"]) * 0.01);          // ~500K writes/day (1% of users post)
+long storage_5yr_gb = (writes_per_day * Convert.ToInt32(reqs["avg_post_size_kb"]) * 365 * Convert.ToInt32(reqs["retention_years"])) / 1_000_000;
+Console.WriteLine($"Storage needed (5yr): {storage_5yr_gb:N0} GB");
+// This single output already tells you: object storage is mandatory, not optional.
 ```
 
 ---

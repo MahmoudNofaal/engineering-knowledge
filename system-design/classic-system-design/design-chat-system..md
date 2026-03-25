@@ -18,71 +18,136 @@ HTTP is request/response — the client always initiates. Chat needs the server 
 
 ## The Code
 
-```python
-# WebSocket server (FastAPI/websockets example)
-# Each connected client maintains a persistent WebSocket connection
+```csharp
+// WebSocket server (ASP.NET Core example)
+// Each connected client maintains a persistent WebSocket connection
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from typing import dict
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using System;
+using System.Collections.Generic;
+using System.Net.WebSockets;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
-app = FastAPI()
+public class ChatWebSocketHandler
+{
+    private static readonly Dictionary<int, WebSocket> ActiveConnections = new();
 
-# In-memory connection registry (use Redis in production for multi-node)
-active_connections: dict[int, WebSocket] = {}
+    public async Task OnWebSocketConnected(HttpContext context, WebSocket webSocket, int userId)
+    {
+        ActiveConnections[userId] = webSocket;
+        byte[] buffer = new byte[1024 * 4];
 
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int):
-    await websocket.accept()
-    active_connections[user_id] = websocket
+        try
+        {
+            while (webSocket.State == WebSocketState.Open)
+            {
+                WebSocketReceiveResult result = await webSocket.ReceiveAsync(
+                    new ArraySegment<byte>(buffer),
+                    CancellationToken.None
+                );
 
-    try:
-        while True:
-            data = await websocket.receive_json()
-            await handle_message(user_id, data)
-    except WebSocketDisconnect:
-        del active_connections[user_id]
-
-async def handle_message(sender_id: int, data: dict):
-    recipient_id = data["to"]
-    message = {
-        "from": sender_id,
-        "content": data["content"],
-        "timestamp": data["timestamp"],
-        "message_id": generate_message_id()  # Snowflake ID for ordering
+                if (result.MessageType == WebSocketMessageType.Text)
+                {
+                    var text = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    var data = JsonSerializer.Deserialize<ChatMessage>(text);
+                    await HandleMessage(userId, data!);
+                }
+            }
+        }
+        finally
+        {
+            ActiveConnections.Remove(userId);
+            webSocket.Dispose();
+        }
     }
 
-    # Persist first, then deliver
-    await save_to_db(message)
+    private async Task HandleMessage(int senderId, ChatMessage data)
+    {
+        int recipientId = data.To;
+        var message = new
+        {
+            from = senderId,
+            content = data.Content,
+            timestamp = data.Timestamp,
+            message_id = GenerateMessageId()
+        };
 
-    if recipient_id in active_connections:
-        # Recipient is on THIS server node
-        await active_connections[recipient_id].send_json(message)
-    else:
-        # Recipient is on a different node — publish to shared channel
-        await redis_pubsub.publish(f"user:{recipient_id}", message)
+        // Persist first, then deliver
+        await SaveToDb(message);
+
+        if (ActiveConnections.ContainsKey(recipientId))
+        {
+            // Recipient is on THIS server node
+            var ws = ActiveConnections[recipientId];
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+            await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        else
+        {
+            // Recipient is on a different node — publish to shared channel
+            await RedisPubSub.PublishAsync($"user:{recipientId}", JsonSerializer.Serialize(message));
+        }
+    }
+
+    private string GenerateMessageId() => Guid.NewGuid().ToString();
+    private async Task SaveToDb(object message) => await Task.CompletedTask;  // DB implementation
+}
+
+public class ChatMessage
+{
+    public int To { get; set; }
+    public string Content { get; set; }
+    public long Timestamp { get; set; }
+}
 ```
 
-```python
-# Redis Pub/Sub bridge for cross-node delivery
-import asyncio
-import redis.asyncio as aioredis
-import json
+```csharp
+// Redis Pub/Sub bridge for cross-node delivery
+using StackExchange.Redis;
+using System;
+using System.Net.WebSockets;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
-class PubSubBridge:
-    def __init__(self, user_id: int, websocket):
-        self.user_id = user_id
-        self.websocket = websocket
-        self.redis = aioredis.from_url("redis://localhost")
+public class PubSubBridge
+{
+    private readonly int _userId;
+    private readonly WebSocket _webSocket;
+    private readonly ISubscriber _redis;
 
-    async def listen(self):
-        """Subscribe to this user's channel and forward to WebSocket."""
-        pubsub = self.redis.pubsub()
-        await pubsub.subscribe(f"user:{self.user_id}")
+    public PubSubBridge(int userId, WebSocket webSocket, IConnectionMultiplexer redis)
+    {
+        _userId = userId;
+        _webSocket = webSocket;
+        _redis = redis.GetSubscriber();
+    }
 
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                payload = json.loads(message["data"])
-                await self.websocket.send_json(payload)
+    public async Task ListenAsync()
+    {
+        // Subscribe to this user's channel and forward to WebSocket
+        await _redis.SubscribeAsync($"user:{_userId}", async (channel, message) =>
+        {
+            if (!message.IsNull)
+            {
+                var payload = JsonSerializer.Deserialize<dynamic>(message.ToString())!;
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload));
+                await _webSocket.SendAsync(
+                    new ArraySegment<byte>(bytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    CancellationToken.None
+                );
+            }
+        });
+
+        // Keep listening
+        await Task.Delay(Timeout.Infinite);
+    }
+}
 ```
 
 ```sql

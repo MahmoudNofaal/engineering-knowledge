@@ -16,90 +16,118 @@ A trie stores strings character by character, sharing prefixes. "cat" and "car" 
 ## The Code
 
 **Trie implementation**
-```python
-class TrieNode:
-    def __init__(self):
-        self.children = {}   # char → TrieNode
-        self.is_end = False  # marks a complete word
+```csharp
+public class TrieNode
+{
+    public Dictionary<char, TrieNode> Children { get; set; } = new();
+    public bool IsEnd { get; set; } = false;  // marks a complete word
+}
 
-class Trie:
-    def __init__(self):
-        self.root = TrieNode()
+public class Trie
+{
+    private readonly TrieNode _root = new();
 
-    def insert(self, word: str) -> None:  # O(L)
-        node = self.root
-        for ch in word:
-            if ch not in node.children:
-                node.children[ch] = TrieNode()
-            node = node.children[ch]
-        node.is_end = True
+    public void Insert(string word)  // O(L)
+    {
+        var node = _root;
+        foreach (char ch in word)
+        {
+            if (!node.Children.ContainsKey(ch))
+                node.Children[ch] = new TrieNode();
+            node = node.Children[ch];
+        }
+        node.IsEnd = true;
+    }
 
-    def search(self, word: str) -> bool:  # O(L)
-        node = self.root
-        for ch in word:
-            if ch not in node.children:
-                return False
-            node = node.children[ch]
-        return node.is_end  # must land on a complete word
+    public bool Search(string word)  // O(L)
+    {
+        var node = _root;
+        foreach (char ch in word)
+        {
+            if (!node.Children.ContainsKey(ch))
+                return false;
+            node = node.Children[ch];
+        }
+        return node.IsEnd;  // must land on a complete word
+    }
 
-    def starts_with(self, prefix: str) -> bool:  # O(L)
-        node = self.root
-        for ch in prefix:
-            if ch not in node.children:
-                return False
-            node = node.children[ch]
-        return True  # any node reached is a valid prefix
+    public bool StartsWith(string prefix)  // O(L)
+    {
+        var node = _root;
+        foreach (char ch in prefix)
+        {
+            if (!node.Children.ContainsKey(ch))
+                return false;
+            node = node.Children[ch];
+        }
+        return true;  // any node reached is a valid prefix
+    }
+}
 ```
 
 **Autocomplete — collect all words with a given prefix**
-```python
-def autocomplete(self, prefix: str) -> list:
-    node = self.root
-    for ch in prefix:
-        if ch not in node.children:
-            return []
-        node = node.children[ch]
-    # DFS from the prefix endpoint to collect all completions
-    results = []
-    self._dfs(node, prefix, results)
-    return results
+```csharp
+public List<string> Autocomplete(string prefix)
+{
+    var node = _root;
+    foreach (char ch in prefix)
+    {
+        if (!node.Children.ContainsKey(ch))
+            return new List<string>();
+        node = node.Children[ch];
+    }
+    // DFS from the prefix endpoint to collect all completions
+    var results = new List<string>();
+    Dfs(node, prefix, results);
+    return results;
+}
 
-def _dfs(self, node: TrieNode, path: str, results: list) -> None:
-    if node.is_end:
-        results.append(path)
-    for ch, child in node.children.items():
-        self._dfs(child, path + ch, results)
+private void Dfs(TrieNode node, string path, List<string> results)
+{
+    if (node.IsEnd)
+        results.Add(path);
+    foreach (var kvp in node.Children)
+    {
+        Dfs(kvp.Value, path + kvp.Key, results);
+    }
+}
 ```
 
 **Word search in a grid using trie pruning — O(m × n × 4^L)**
-```python
-def find_words(board: list, words: list) -> list:
-    trie = Trie()
-    for word in words:
-        trie.insert(word)
+```csharp
+public List<string> FindWords(char[][] board, string[] words)
+{
+    var trie = new Trie();
+    foreach (string word in words)
+        trie.Insert(word);
 
-    rows, cols = len(board), len(board[0])
-    found = set()
+    int rows = board.Length, cols = board[0].Length;
+    var found = new HashSet<string>();
 
-    def dfs(node, r, c, path):
-        ch = board[r][c]
-        if ch not in node.children:
-            return           # prune — no words start with this path
-        node = node.children[ch]
-        path += ch
-        if node.is_end:
-            found.add(path)
-        board[r][c] = '#'    # mark visited
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and board[nr][nc] != '#':
-                dfs(node, nr, nc, path)
-        board[r][c] = ch     # restore
+    void Dfs(TrieNode node, int r, int c, string path)
+    {
+        char ch = board[r][c];
+        if (!node.Children.ContainsKey(ch))
+            return;   // prune — no words start with this path
+        node = node.Children[ch];
+        path += ch;
+        if (node.IsEnd)
+            found.Add(path);
+        board[r][c] = '#';    // mark visited
+        foreach (var (dr, dc) in new[] { (-1, 0), (1, 0), (0, -1), (0, 1) })
+        {
+            int nr = r + dr, nc = c + dc;
+            if (0 <= nr && nr < rows && 0 <= nc && nc < cols && board[nr][nc] != '#')
+                Dfs(node, nr, nc, path);
+        }
+        board[r][c] = ch;     // restore
+    }
 
-    for r in range(rows):
-        for c in range(cols):
-            dfs(trie.root, r, c, "")
-    return list(found)
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            Dfs(trie._root, r, c, "");
+    return found.ToList();
+}
 ```
 
 ---

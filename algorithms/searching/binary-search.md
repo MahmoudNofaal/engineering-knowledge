@@ -18,95 +18,127 @@ The hard part isn't the idea — it's the boundary conditions. Off-by-one errors
 ## The Code
 
 **Exact match**
-```python
-def binary_search(items: list, target: int) -> int:
-    lo, hi = 0, len(items) - 1
-    while lo <= hi:                        # = because single element is valid
-        mid = lo + (hi - lo) // 2         # avoids integer overflow vs (lo+hi)//2
-        if items[mid] == target:
-            return mid
-        elif items[mid] < target:
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return -1                              # not found
+```csharp
+public static int BinarySearch(int[] items, int target)
+{
+    int lo = 0, hi = items.Length - 1;
+    while (lo <= hi)                        // = because single element is valid
+    {
+        int mid = lo + (hi - lo) / 2;       // avoids integer overflow vs (lo+hi)/2
+        if (items[mid] == target)
+            return mid;
+        else if (items[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return -1;                              // not found
+}
 ```
 
 **Lower bound — leftmost index where items[i] >= target**
-```python
-def lower_bound(items: list, target: int) -> int:
-    lo, hi = 0, len(items)                # hi = len, not len-1
-    while lo < hi:                        # strict < because hi is exclusive
-        mid = (lo + hi) // 2
-        if items[mid] < target:
-            lo = mid + 1
-        else:
-            hi = mid                      # don't exclude mid — it could be the answer
-    return lo                             # lo == hi, the insertion point
+```csharp
+public static int LowerBound(int[] items, int target)
+{
+    int lo = 0, hi = items.Length;        // hi = len, not len-1
+    while (lo < hi)                        // strict < because hi is exclusive
+    {
+        int mid = (lo + hi) / 2;
+        if (items[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid;                      // don't exclude mid — it could be the answer
+    }
+    return lo;                             // lo == hi, the insertion point
+}
 ```
 
 **Upper bound — leftmost index where items[i] > target**
-```python
-def upper_bound(items: list, target: int) -> int:
-    lo, hi = 0, len(items)
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if items[mid] <= target:          # only difference from lower_bound
-            lo = mid + 1
-        else:
-            hi = mid
-    return lo
+```csharp
+public static int UpperBound(int[] items, int target)
+{
+    int lo = 0, hi = items.Length;
+    while (lo < hi)
+    {
+        int mid = (lo + hi) / 2;
+        if (items[mid] <= target)          // only difference from lower_bound
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
 ```
 
 **Binary search on a condition — generalized template**
-```python
-# Find the smallest x in [lo, hi] where condition(x) is True.
-# Assumes: condition is False for some prefix, True for the rest (monotonic).
-def binary_search_condition(lo: int, hi: int, condition) -> int:
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if condition(mid):
-            hi = mid          # mid could be the answer, don't exclude it
-        else:
-            lo = mid + 1      # mid is definitely not the answer
-    return lo                 # first index where condition is True
+```csharp
+// Find the smallest x in [lo, hi] where condition(x) is True.
+// Assumes: condition is False for some prefix, True for the rest (monotonic).
+public static int BinarySearchCondition(int lo, int hi, Func<int, bool> condition)
+{
+    while (lo < hi)
+    {
+        int mid = (lo + hi) / 2;
+        if (condition(mid))
+            hi = mid;          // mid could be the answer, don't exclude it
+        else
+            lo = mid + 1;      // mid is definitely not the answer
+    }
+    return lo;                 // first index where condition is True
+}
 ```
 
 **Real usage: find minimum speed to ship packages within D days**
-```python
-def ship_within_days(weights: list, days: int) -> int:
-    def can_ship(capacity: int) -> bool:
-        current, day_count = 0, 1
-        for w in weights:
-            if current + w > capacity:
-                day_count += 1
-                current = 0
-            current += w
-        return day_count <= days
+```csharp
+public static int ShipWithinDays(int[] weights, int days)
+{
+    bool CanShip(int capacity)
+    {
+        int current = 0, dayCount = 1;
+        foreach (int w in weights)
+        {
+            if (current + w > capacity)
+            {
+                dayCount++;
+                current = 0;
+            }
+            current += w;
+        }
+        return dayCount <= days;
+    }
 
-    lo, hi = max(weights), sum(weights)
-    return binary_search_condition(lo, hi, can_ship)
+    int lo = weights.Max(), hi = weights.Sum();
+    return BinarySearchCondition(lo, hi, CanShip);
+}
 ```
 
 **Search in rotated sorted array**
-```python
-def search_rotated(items: list, target: int) -> int:
-    lo, hi = 0, len(items) - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if items[mid] == target:
-            return mid
-        if items[lo] <= items[mid]:           # left half is sorted
-            if items[lo] <= target < items[mid]:
-                hi = mid - 1
-            else:
-                lo = mid + 1
-        else:                                 # right half is sorted
-            if items[mid] < target <= items[hi]:
-                lo = mid + 1
-            else:
-                hi = mid - 1
-    return -1
+```csharp
+public static int SearchRotated(int[] items, int target)
+{
+    int lo = 0, hi = items.Length - 1;
+    while (lo <= hi)
+    {
+        int mid = (lo + hi) / 2;
+        if (items[mid] == target)
+            return mid;
+        if (items[lo] <= items[mid])  // left half is sorted
+        {
+            if (items[lo] <= target && target < items[mid])
+                hi = mid - 1;
+            else
+                lo = mid + 1;
+        }
+        else  // right half is sorted
+        {
+            if (items[mid] < target && target <= items[hi])
+                lo = mid + 1;
+            else
+                hi = mid - 1;
+        }
+    }
+    return -1;
+}
 ```
 
 ---

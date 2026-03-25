@@ -16,50 +16,66 @@ Big-O describes the worst-case growth rate of an algorithm — not the exact run
 ## The Code
 
 **O(1) — Constant: access by index**
-```python
-def get_first(items: list) -> int:
-    return items[0]  # always one operation, regardless of list size
+```csharp
+public static int GetFirst(List<int> items)
+{
+    return items[0];  // always one operation, regardless of list size
+}
 ```
 
 **O(n) — Linear: single loop**
-```python
-def find_max(items: list) -> int:
-    max_val = items[0]
-    for item in items:
-        if item > max_val:
-            max_val = item
-    return max_val
+```csharp
+public static int FindMax(List<int> items)
+{
+    int maxVal = items[0];
+    foreach (var item in items)
+    {
+        if (item > maxVal)
+            maxVal = item;
+    }
+    return maxVal;
+}
 ```
 
 **O(n²) — Quadratic: nested loops**
-```python
-def has_duplicate(items: list) -> bool:
-    for i in range(len(items)):
-        for j in range(len(items)):
-            if i != j and items[i] == items[j]:
-                return True
-    return False
+```csharp
+public static bool HasDuplicate(List<int> items)
+{
+    for (int i = 0; i < items.Count; i++)
+    {
+        for (int j = 0; j < items.Count; j++)
+        {
+            if (i != j && items[i] == items[j])
+                return true;
+        }
+    }
+    return false;
+}
 ```
 
 **O(log n) — Logarithmic: binary search**
-```python
-def binary_search(items: list, target: int) -> int:
-    lo, hi = 0, len(items) - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if items[mid] == target:
-            return mid
-        elif items[mid] < target:
-            lo = mid + 1  # discard left half
-        else:
-            hi = mid - 1  # discard right half
-    return -1
+```csharp
+public static int BinarySearch(List<int> items, int target)
+{
+    int lo = 0, hi = items.Count - 1;
+    while (lo <= hi)
+    {
+        int mid = (lo + hi) / 2;
+        if (items[mid] == target)
+            return mid;
+        else if (items[mid] < target)
+            lo = mid + 1;  // discard left half
+        else
+            hi = mid - 1;  // discard right half
+    }
+    return -1;
+}
 ```
 
-**O(n log n) — Linearithmic: Python's built-in sort (Timsort)**
-```python
-items = [5, 2, 8, 1, 9]
-items.sort()  # O(n log n) — the best possible for comparison-based sorting
+**O(n log n) — Linearithmic: C#'s built-in sort**
+```csharp
+var items = new List<int> { 5, 2, 8, 1, 9 };
+items.Sort();  // O(n log n) — the best possible for comparison-based sorting
 ```
 
 ---

@@ -16,76 +16,114 @@ Unlike arrays, linked list nodes can live anywhere in memory. Each node knows wh
 ## The Code
 
 **Node definition and basic singly linked list**
-```python
-class Node:
-    def __init__(self, val: int):
-        self.val = val
-        self.next = None
+```csharp
+public class Node
+{
+    public int val;
+    public Node next;
+    public Node(int val)
+    {
+        this.val = val;
+        this.next = null;
+    }
+}
 
-class LinkedList:
-    def __init__(self):
-        self.head = None
+public class LinkedList
+{
+    public Node head;
 
-    def prepend(self, val: int) -> None:  # O(1)
-        node = Node(val)
-        node.next = self.head
-        self.head = node
+    public void Prepend(int val)  // O(1)
+    {
+        var node = new Node(val);
+        node.next = head;
+        head = node;
+    }
 
-    def append(self, val: int) -> None:   # O(n) — must walk to tail
-        node = Node(val)
-        if not self.head:
-            self.head = node
-            return
-        curr = self.head
-        while curr.next:
-            curr = curr.next
-        curr.next = node
+    public void Append(int val)   // O(n) — must walk to tail
+    {
+        var node = new Node(val);
+        if (head == null)
+        {
+            head = node;
+            return;
+        }
+        Node curr = head;
+        while (curr.next != null)
+            curr = curr.next;
+        curr.next = node;
+    }
 
-    def delete(self, val: int) -> None:   # O(n) — must find the node first
-        dummy = Node(0)
-        dummy.next = self.head
-        curr = dummy
-        while curr.next:
-            if curr.next.val == val:
-                curr.next = curr.next.next
-                break
-            curr = curr.next
-        self.head = dummy.next
+    public void Delete(int val)   // O(n) — must find the node first
+    {
+        var dummy = new Node(0);
+        dummy.next = head;
+        Node curr = dummy;
+        while (curr.next != null)
+        {
+            if (curr.next.val == val)
+            {
+                curr.next = curr.next.next;
+                break;
+            }
+            curr = curr.next;
+        }
+        head = dummy.next;
+    }
+}
 ```
 
 **Reverse a linked list in-place — O(n) time, O(1) space**
-```python
-def reverse(head: Node) -> Node:
-    prev = None
-    curr = head
-    while curr:
-        nxt = curr.next   # save next before overwriting
-        curr.next = prev  # reverse the pointer
-        prev = curr
-        curr = nxt
-    return prev           # prev is new head
+```csharp
+public static Node Reverse(Node head)
+{
+    Node prev = null;
+    Node curr = head;
+    while (curr != null)
+    {
+        Node nxt = curr.next;   // save next before overwriting
+        curr.next = prev;       // reverse the pointer
+        prev = curr;
+        curr = nxt;
+    }
+    return prev;               // prev is new head
+}
 ```
 
 **Detect a cycle — Floyd's algorithm**
-```python
-def has_cycle(head: Node) -> bool:
-    slow, fast = head, head
-    while fast and fast.next:
-        slow = slow.next
-        fast = fast.next.next
-        if slow == fast:
-            return True
-    return False
+```csharp
+public static bool HasCycle(Node head)
+{
+    Node slow = head, fast = head;
+    while (fast != null && fast.next != null)
+    {
+        slow = slow.next;
+        fast = fast.next.next;
+        if (slow == fast)
+            return true;
+    }
+    return false;
+}
 ```
 
 **Find middle node — slow/fast pointer**
-```python
-def find_middle(head: Node) -> Node:
-    slow, fast = head, head
-    while fast and fast.next:
-        slow = slow.next
-        fast = fast.next.next
-    return slow  # slow is at the middle when fast reaches the end
+```csharp
+public class Node
+{
+    public int Val { get; set; }
+    public Node Next { get; set; }
+}
+
+public Node FindMiddle(Node head)
+{
+    var slow = head;
+    var fast = head;
+    while (fast != null && fast.Next != null)
+    {
+        slow = slow.Next;
+        fast = fast.Next.Next;
+    }
+    return slow;  // slow is at the middle when fast reaches the end
+}
 ```
 
 ---

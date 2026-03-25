@@ -18,101 +18,143 @@ Video streaming has two distinct phases. Phase 1 (upload + processing): user upl
 
 ## The Code
 
-```python
-# Upload pipeline trigger — async transcoding on upload complete
-import boto3
-import json
+```csharp
+// Upload pipeline trigger — async transcoding on upload complete
+using Amazon.SQS;
+using Amazon.SQS.Model;
+using System.Text.Json;
 
-sqs = boto3.client('sqs', region_name='us-east-1')
-TRANSCODE_QUEUE = "https://sqs.us-east-1.amazonaws.com/123/transcode-jobs"
+public class VideoUploadService
+{
+    private readonly AmazonSQSClient _sqs;
+    private const string TranscodeQueue = "https://sqs.us-east-1.amazonaws.com/123/transcode-jobs";
 
-def on_video_uploaded(video_id: int, raw_s3_key: str, db):
-    """Called after raw video is confirmed uploaded to S3."""
-    # Update DB to 'processing' state
-    db.execute(
-        "UPDATE videos SET status = 'processing' WHERE id = %s", video_id
-    )
-
-    # Enqueue transcoding job
-    job = {
-        "video_id": video_id,
-        "input_key": raw_s3_key,
-        "output_prefix": f"videos/{video_id}/",
-        "renditions": [
-            {"resolution": "360p",  "bitrate": "800k"},
-            {"resolution": "720p",  "bitrate": "2500k"},
-            {"resolution": "1080p", "bitrate": "5000k"},
-        ]
+    public VideoUploadService()
+    {
+        _sqs = new AmazonSQSClient();
     }
-    sqs.send_message(QueueUrl=TRANSCODE_QUEUE, MessageBody=json.dumps(job))
+
+    public async Task OnVideoUploadedAsync(int videoId, string rawS3Key, object db)
+    {
+        // Update DB to 'processing' state
+        // db.Execute("UPDATE videos SET status = 'processing' WHERE id = @id", new { id = videoId });
+
+        // Enqueue transcoding job
+        var job = new
+        {
+            video_id = videoId,
+            input_key = rawS3Key,
+            output_prefix = $"videos/{videoId}/",
+            renditions = new[]
+            {
+                new { resolution = "360p", bitrate = "800k" },
+                new { resolution = "720p", bitrate = "2500k" },
+                new { resolution = "1080p", bitrate = "5000k" },
+            }
+        };
+
+        var request = new SendMessageRequest
+        {
+            QueueUrl = TranscodeQueue,
+            MessageBody = JsonSerializer.Serialize(job)
+        };
+        await _sqs.SendMessageAsync(request);
+    }
+}
 ```
 
-```python
-# Transcoding worker (conceptual — uses ffmpeg under the hood)
-import subprocess
-import boto3
-import json
+```csharp
+// Transcoding worker (conceptual — FFmpeg is called via System.Diagnostics)
+using Amazon.S3;
+using System.Diagnostics;
+using System.Text.Json;
 
-s3 = boto3.client('s3')
-BUCKET = "my-video-storage"
+public class TranscodingWorker
+{
+    private readonly AmazonS3Client _s3;
+    private const string Bucket = "my-video-storage";
 
-def transcode_video(job: dict):
-    video_id = job["video_id"]
-    input_key = job["input_key"]
-    output_prefix = job["output_prefix"]
+    public TranscodingWorker()
+    {
+        _s3 = new AmazonS3Client();
+    }
 
-    # Download raw video locally
-    local_input = f"/tmp/{video_id}_raw.mp4"
-    s3.download_file(BUCKET, input_key, local_input)
+    public async Task TranscodeVideoAsync(string jobJson)
+    {
+        var job = JsonSerializer.Deserialize<Dictionary<string, object>>(jobJson);
+        var videoId = job["video_id"].ToString();
+        var inputKey = job["input_key"].ToString();
+        var outputPrefix = job["output_prefix"].ToString();
 
-    for rendition in job["renditions"]:
-        res = rendition["resolution"]
-        bitrate = rendition["bitrate"]
-        output_dir = f"/tmp/{video_id}/{res}"
+        // Download raw video locally
+        var localInput = $"/tmp/{videoId}_raw.mp4";
+        await _s3.GetObjectAsync(Bucket, inputKey, localInput);
 
-        # Use ffmpeg to segment into HLS chunks
-        # -hls_time 6: each chunk is 6 seconds
-        subprocess.run([
-            "ffmpeg", "-i", local_input,
-            "-vf", f"scale=-2:{res[:-1]}",  # e.g. scale=-2:720
-            "-b:v", bitrate,
-            "-hls_time", "6",
-            "-hls_playlist_type", "vod",
-            "-hls_segment_filename", f"{output_dir}/%03d.ts",
-            f"{output_dir}/index.m3u8"
-        ], check=True)
+        // Iterate over renditions
+        var renditions = job["renditions"] as List<Dictionary<string, string>>;
+        foreach (var rendition in renditions)
+        {
+            var res = rendition["resolution"];
+            var bitrate = rendition["bitrate"];
+            var outputDir = $"/tmp/{videoId}/{res}";
+            Directory.CreateDirectory(outputDir);
 
-        # Upload chunks and manifest to S3
-        for file in os.listdir(output_dir):
-            s3.upload_file(
-                f"{output_dir}/{file}",
-                BUCKET,
-                f"{output_prefix}{res}/{file}",
-                ExtraArgs={"ContentType": "application/x-mpegURL" if file.endswith(".m3u8") else "video/MP2T"}
-            )
+            // Call ffmpeg to segment into HLS chunks
+            var process = new ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                Arguments = $" -i {localInput} -vf scale=-2:{res[..^1]} -b:v {bitrate} " +
+                           $"-hls_time 6 -hls_playlist_type vod " +
+                           $"-hls_segment_filename \"{outputDir}/%03d.ts\" \"{outputDir}/index.m3u8\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+            using var p = Process.Start(process);
+            p.WaitForExit();
+
+            // Upload chunks and manifest to S3
+            foreach (var file in Directory.GetFiles(outputDir))
+            {
+                var contentType = file.EndsWith(".m3u8") ? "application/x-mpegURL" : "video/MP2T";
+                await _s3.PutObjectAsync(new Amazon.S3.Model.PutObjectRequest
+                {
+                    BucketName = Bucket,
+                    Key = $"{outputPrefix}{res}/{Path.GetFileName(file)}",
+                    FilePath = file,
+                    ContentType = contentType
+                });
+            }
+        }
+    }
+}
 ```
 
-```python
-# Generate master HLS manifest listing all quality levels
-def generate_master_manifest(video_id: int, renditions: list[dict]) -> str:
-    """
+```csharp
+// Generate master HLS manifest listing all quality levels
+public string GenerateMasterManifest(int videoId, List<(string Resolution, int Bitrate)> renditions)
+{
+    /*
     Creates the top-level .m3u8 that players use to discover quality options.
     Players automatically switch between renditions based on bandwidth.
-    """
-    lines = ["#EXTM3U", "#EXT-X-VERSION:3"]
+    */
+    var lines = new List<string> { "#EXTM3U", "#EXT-X-VERSION:3" };
 
-    bandwidth_map = {"360p": 800000, "720p": 2500000, "1080p": 5000000}
-    resolution_map = {"360p": "640x360", "720p": "1280x720", "1080p": "1920x1080"}
+    var resolutionMap = new Dictionary<string, string>
+    {
+        { "360p", "640x360" },
+        { "720p", "1280x720" },
+        { "1080p", "1920x1080" }
+    };
 
-    for r in renditions:
-        res = r["resolution"]
-        lines.append(
-            f'#EXT-X-STREAM-INF:BANDWIDTH={bandwidth_map[res]},'
-            f'RESOLUTION={resolution_map[res]}'
-        )
-        lines.append(f"https://cdn.example.com/videos/{video_id}/{res}/index.m3u8")
+    foreach (var (res, bandwidth) in renditions)
+    {
+        lines.Add($"#EXT-X-STREAM-INF:BANDWIDTH={bandwidth * 1000}," +
+                 $"RESOLUTION={resolutionMap[res]}");
+        lines.Add($"https://cdn.example.com/videos/{videoId}/{res}/index.m3u8");
+    }
 
-    return "\n".join(lines)
+    return string.Join("\n", lines);
+}
 ```
 
 ```sql

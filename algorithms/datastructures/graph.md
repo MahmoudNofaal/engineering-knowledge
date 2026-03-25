@@ -18,98 +18,164 @@ The two fundamental traversals — BFS and DFS — solve completely different pr
 ## The Code
 
 **Graph representations**
-```python
-# Adjacency list — standard for sparse graphs
-graph = {
-    0: [1, 2],
-    1: [0, 3],
-    2: [0],
-    3: [1]
-}
+```csharp
+// Adjacency list — standard for sparse graphs
+var graph = new Dictionary<int, List<int>>
+{
+    { 0, new List<int> { 1, 2 } },
+    { 1, new List<int> { 0, 3 } },
+    { 2, new List<int> { 0 } },
+    { 3, new List<int> { 1 } }
+};
 
-# Adjacency matrix — O(V²) space, O(1) edge check
-n = 4
-matrix = [[0] * n for _ in range(n)]
-matrix[0][1] = 1   # edge from 0 to 1
-matrix[1][0] = 1   # undirected
+// Adjacency matrix — O(V²) space, O(1) edge check
+int n = 4;
+int[][] matrix = new int[n][];
+for (int i = 0; i < n; i++)
+    matrix[i] = new int[n];
+    
+matrix[0][1] = 1;   // edge from 0 to 1
+matrix[1][0] = 1;   // undirected
 ```
 
 **DFS — recursive and iterative**
-```python
-def dfs_recursive(graph: dict, node: int, visited: set) -> None:
-    visited.add(node)
-    for neighbor in graph[node]:
-        if neighbor not in visited:
-            dfs_recursive(graph, neighbor, visited)
+```csharp
+public static void DfsRecursive(Dictionary<int, List<int>> graph, int node, HashSet<int> visited)
+{
+    visited.Add(node);
+    if (graph.ContainsKey(node))
+    {
+        foreach (var neighbor in graph[node])
+        {
+            if (!visited.Contains(neighbor))
+                DfsRecursive(graph, neighbor, visited);
+        }
+    }
+}
 
-def dfs_iterative(graph: dict, start: int) -> list:
-    visited, stack, order = set(), [start], []
-    while stack:
-        node = stack.pop()
-        if node not in visited:
-            visited.add(node)
-            order.append(node)
-            stack.extend(graph[node])
-    return order
+public static List<int> DfsIterative(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int>();
+    var stack = new Stack<int>();
+    var order = new List<int>();
+    stack.Push(start);
+    
+    while (stack.Count > 0)
+    {
+        int node = stack.Pop();
+        if (!visited.Contains(node))
+        {
+            visited.Add(node);
+            order.Add(node);
+            if (graph.ContainsKey(node))
+            {
+                foreach (var neighbor in graph[node])
+                    stack.Push(neighbor);
+            }
+        }
+    }
+    return order;
+}
 ```
 
 **BFS — shortest path on unweighted graph**
-```python
-from collections import deque
-
-def bfs(graph: dict, start: int, end: int) -> int:
-    queue = deque([(start, 0)])
-    visited = set([start])
-    while queue:
-        node, dist = queue.popleft()
-        if node == end:
-            return dist
-        for neighbor in graph[node]:
-            if neighbor not in visited:
-                visited.add(neighbor)
-                queue.append((neighbor, dist + 1))
-    return -1
+```csharp
+public static int Bfs(Dictionary<int, List<int>> graph, int start, int end)
+{
+    var queue = new Queue<(int node, int dist)>();
+    var visited = new HashSet<int> { start };
+    queue.Enqueue((start, 0));
+    
+    while (queue.Count > 0)
+    {
+        var (node, dist) = queue.Dequeue();
+        if (node == end)
+            return dist;
+        
+        if (graph.ContainsKey(node))
+        {
+            foreach (var neighbor in graph[node])
+            {
+                if (!visited.Contains(neighbor))
+                {
+                    visited.Add(neighbor);
+                    queue.Enqueue((neighbor, dist + 1));
+                }
+            }
+        }
+    }
+    return -1;
+}
 ```
 
 **Cycle detection — directed graph**
-```python
-def has_cycle(graph: dict) -> bool:
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = {node: WHITE for node in graph}
+```csharp
+public static bool HasCycle(Dictionary<int, List<int>> graph)
+{
+    const int WHITE = 0, GRAY = 1, BLACK = 2;
+    var color = new Dictionary<int, int>();
+    foreach (var node in graph.Keys)
+        color[node] = WHITE;
 
-    def dfs(node: int) -> bool:
-        color[node] = GRAY          # in current DFS path
-        for neighbor in graph[node]:
-            if color[neighbor] == GRAY:
-                return True         # back edge = cycle
-            if color[neighbor] == WHITE and dfs(neighbor):
-                return True
-        color[node] = BLACK         # fully explored
-        return False
+    bool Dfs(int node)
+    {
+        color[node] = GRAY;          // in current DFS path
+        if (graph.ContainsKey(node))
+        {
+            foreach (var neighbor in graph[node])
+            {
+                if (color[neighbor] == GRAY)
+                    return true;         // back edge = cycle
+                if (color[neighbor] == WHITE && Dfs(neighbor))
+                    return true;
+            }
+        }
+        color[node] = BLACK;         // fully explored
+        return false;
+    }
 
-    return any(dfs(n) for n in graph if color[n] == WHITE)
+    foreach (var node in graph.Keys)
+        if (color[node] == WHITE && Dfs(node))
+            return true;
+    return false;
+}
 ```
 
 **Topological sort — Kahn's algorithm (BFS-based)**
-```python
-from collections import deque, defaultdict
-
-def topo_sort(n: int, edges: list) -> list:
-    graph = defaultdict(list)
-    in_degree = [0] * n
-    for u, v in edges:
-        graph[u].append(v)
-        in_degree[v] += 1
-    queue = deque(i for i in range(n) if in_degree[i] == 0)
-    order = []
-    while queue:
-        node = queue.popleft()
-        order.append(node)
-        for neighbor in graph[node]:
-            in_degree[neighbor] -= 1
-            if in_degree[neighbor] == 0:
-                queue.append(neighbor)
-    return order if len(order) == n else []  # empty = cycle exists
+```csharp
+public static List<int> TopoSort(int n, List<(int u, int v)> edges)
+{
+    var graph = new Dictionary<int, List<int>>();
+    var inDegree = new int[n];
+    
+    for (int i = 0; i < n; i++)
+        graph[i] = new List<int>();
+    
+    foreach (var (u, v) in edges)
+    {
+        graph[u].Add(v);
+        inDegree[v]++;
+    }
+    
+    var queue = new Queue<int>();
+    for (int i = 0; i < n; i++)
+        if (inDegree[i] == 0)
+            queue.Enqueue(i);
+    
+    var order = new List<int>();
+    while (queue.Count > 0)
+    {
+        int node = queue.Dequeue();
+        order.Add(node);
+        foreach (var neighbor in graph[node])
+        {
+            inDegree[neighbor]--;
+            if (inDegree[neighbor] == 0)
+                queue.Enqueue(neighbor);
+        }
+    }
+    return order.Count == n ? order : new List<int>();  // empty = cycle exists
+}
 ```
 
 ---

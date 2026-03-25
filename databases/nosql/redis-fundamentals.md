@@ -19,126 +19,147 @@ Redis keeps everything in RAM. That's the whole model — not a cache layer on t
 ## The Code
 
 **Strings — the foundation**
-```python
-import redis
+```csharp
+using StackExchange.Redis;
 
-r = redis.Redis(decode_responses=True)
+IConnectionMultiplexer redis = ConnectionMultiplexer.Connect("localhost:6379");
+IDatabase db = redis.GetDatabase();
 
-# Basic get/set with TTL (seconds)
-r.set("user:42:name", "Ali", ex=3600)
-r.get("user:42:name")  # "Ali"
+// Basic get/set with TTL (seconds)
+db.StringSet("user:42:name", "Ali", TimeSpan.FromSeconds(3600));
+string value = db.StringGet("user:42:name");  // "Ali"
 
-# Atomic increment — no read-modify-write race condition
-r.set("api:hits", 0)
-r.incr("api:hits")       # 1
-r.incrby("api:hits", 5)  # 6
+// Atomic increment — no read-modify-write race condition
+db.StringSet("api:hits", "0");
+db.StringIncrement("api:hits");       // 1
+db.StringIncrement("api:hits", 5);    // 6
 ```
 
 **Hashes — structured objects**
-```python
-# Store a user object — one key, multiple fields
-r.hset("user:42", mapping={
-    "name":  "Ali",
-    "email": "ali@example.com",
-    "plan":  "pro"
-})
+```csharp
+// Store a user object — one key, multiple fields
+db.HashSet("user:42", new[]
+{
+    new HashEntry("name", "Ali"),
+    new HashEntry("email", "ali@example.com"),
+    new HashEntry("plan", "pro")
+});
 
-r.hget("user:42", "plan")      # "pro"
-r.hgetall("user:42")           # full dict
-r.hincrby("user:42", "logins", 1)  # atomic field increment
+RedisValue plan = db.HashGet("user:42", "plan");      // "pro"
+HashEntry[] allFields = db.HashGetAll("user:42");     // full dict
+db.HashIncrement("user:42", "logins", 1);  // atomic field increment
 ```
 
 **Lists — queues and stacks**
-```python
-# LPUSH + RPOP = queue (FIFO)
-r.lpush("jobs", "job:1", "job:2", "job:3")
-r.rpop("jobs")   # "job:1"
+```csharp
+// LPUSH + RPOP = queue (FIFO)
+db.ListLeftPush("jobs", new RedisValue[] { "job:1", "job:2", "job:3" });
+RedisValue job = db.ListRightPop("jobs");   // "job:1"
 
-# BLPOP = blocking pop — waits until an item appears (timeout in seconds)
-r.blpop("jobs", timeout=5)
+// BLPOP = blocking pop — waits until an item appears (timeout in seconds)
+RedisValue blockedJob = db.ListLeftPop("jobs", TimeSpan.FromSeconds(5));
 
-# LPUSH + LPOP = stack (LIFO)
-r.lpush("history", "page:home")
-r.lpop("history")
+// LPUSH + LPOP = stack (LIFO)
+db.ListLeftPush("history", "page:home");
+RedisValue historyItem = db.ListLeftPop("history");
 ```
 
 **Sets — unique membership**
-```python
-r.sadd("online_users", "u1", "u2", "u3")
-r.sismember("online_users", "u2")   # True
-r.smembers("online_users")          # {"u1", "u2", "u3"}
+```csharp
+db.SetAdd("online_users", new RedisValue[] { "u1", "u2", "u3" });
+bool isMember = db.SetContains("online_users", "u2");   // true
+RedisValue[] members = db.SetMembers("online_users");   // {"u1", "u2", "u3"}
 
-# Set operations — who's online in both groups?
-r.sadd("group:a", "u1", "u2")
-r.sadd("group:b", "u2", "u3")
-r.sinter("group:a", "group:b")      # {"u2"}
+// Set operations — who's online in both groups?
+db.SetAdd("group:a", new RedisValue[] { "u1", "u2" });
+db.SetAdd("group:b", new RedisValue[] { "u2", "u3" });
+RedisValue[] intersection = db.SetCombine(SetOperation.Intersect, "group:a", "group:b");  // {"u2"}
 ```
 
 **Sorted Sets — leaderboards and ranked data**
-```python
-# zadd: key → {member: score}
-r.zadd("leaderboard", {"alice": 1500, "bob": 1200, "carol": 1800})
+```csharp
+// zadd: key → {member: score}
+db.SortedSetAdd("leaderboard", new[]
+{
+    new SortedSetEntry("alice", 1500),
+    new SortedSetEntry("bob", 1200),
+    new SortedSetEntry("carol", 1800)
+});
 
-# Top 3 — highest score first
-r.zrevrange("leaderboard", 0, 2, withscores=True)
-# [("carol", 1800.0), ("alice", 1500.0), ("bob", 1200.0)]
+// Top 3 — highest score first
+SortedSetEntry[] top3 = db.SortedSetRangeByRankWithScores("leaderboard", 0, 2, Order.Descending);
+// [("carol", 1800), ("alice", 1500), ("bob", 1200)]
 
-# Rank of a specific member (0-indexed, ascending)
-r.zrevrank("leaderboard", "alice")  # 1
+// Rank of a specific member (0-indexed, ascending)
+long? rank = db.SortedSetRank("leaderboard", "alice", Order.Descending);  // 1
 
-# Atomic score update
-r.zincrby("leaderboard", 100, "bob")  # bob now has 1300
+// Atomic score update
+db.SortedSetIncrement("leaderboard", "bob", 100);  // bob now has 1300
 ```
 
 **Expiry and TTL**
-```python
-r.set("otp:u42", "839201")
-r.expire("otp:u42", 300)        # 5 minute TTL
-r.ttl("otp:u42")                # seconds remaining
-r.persist("otp:u42")            # remove TTL, key lives forever
+```csharp
+db.StringSet("otp:u42", "839201");
+db.KeyExpire("otp:u42", TimeSpan.FromSeconds(300));        // 5 minute TTL
+TimeSpan? ttl = db.KeyTimeToLive("otp:u42");               // seconds remaining
+db.KeyPersist("otp:u42");                                  // remove TTL, key lives forever
 
-# Set with expiry in one call
-r.set("session:abc", "data", ex=3600)   # seconds
-r.set("session:xyz", "data", px=60000)  # milliseconds
+// Set with expiry in one call
+db.StringSet("session:abc", "data", TimeSpan.FromSeconds(3600));    // seconds
+db.StringSet("session:xyz", "data", TimeSpan.FromMilliseconds(60000));  // milliseconds
 ```
 
 **Distributed lock — SETNX pattern**
-```python
-import uuid
+```csharp
+using System;
+using StackExchange.Redis;
 
-lock_key = "lock:resource:payments"
-lock_val = str(uuid.uuid4())   # unique value so only we can release it
+var lockKey = "lock:resource:payments";
+var lockVal = Guid.NewGuid().ToString();   // unique value so only we can release it
 
-# Acquire: SET only if Not eXists, with TTL to prevent deadlock
-acquired = r.set(lock_key, lock_val, nx=True, ex=10)
+// Acquire: SET only if Not eXists, with TTL to prevent deadlock
+bool acquired = db.StringSet(lockKey, lockVal, TimeSpan.FromSeconds(10), When.NotExists);
 
-if acquired:
-    try:
-        # critical section
-        pass
-    finally:
-        # Release only if we still own it — use a Lua script for atomicity
-        script = """
-        if redis.call("get", KEYS[1]) == ARGV[1] then
-            return redis.call("del", KEYS[1])
-        else
-            return 0
-        end
-        """
-        r.eval(script, 1, lock_key, lock_val)
+if (acquired)
+{
+    try
+    {
+        // critical section
+    }
+    finally
+    {
+        // Release only if we still own it — use a Lua script for atomicity
+        var script = @"
+            if redis.call(\"get\", KEYS[1]) == ARGV[1] then
+                return redis.call(\"del\", KEYS[1])
+            else
+                return 0
+            end";
+        db.ScriptEvaluate(script, new RedisKey[] { lockKey }, new RedisValue[] { lockVal });
+    }
+}
 ```
 
 **Pub/Sub — fire and forget messaging**
-```python
-# Publisher
-r.publish("notifications", '{"user": 42, "msg": "welcome"}')
+```csharp
+// Publisher
+db.Publish("notifications", "{\"user\": 42, \"msg\": \"welcome\"}");
 
-# Subscriber (blocking)
-pubsub = r.pubsub()
-pubsub.subscribe("notifications")
-for message in pubsub.listen():
-    if message["type"] == "message":
-        print(message["data"])
+// Subscriber (blocking)
+var subscriber = redis.GetSubscriber();
+subscriber.Subscribe("notifications", (channel, message) =>
+{
+    if (!message.IsNull)
+    {
+        Console.WriteLine(message.ToString());
+    }
+});
+
+// Keep listening
+while (true)
+{
+    System.Threading.Thread.Sleep(1000);
+}
 ```
 
 ---

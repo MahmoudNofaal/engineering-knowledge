@@ -18,116 +18,174 @@ Files are not stored in your application DB — they're stored in an object stor
 
 ## The Code
 
-```python
-# Generate pre-signed upload URL — client uploads directly to S3
-import boto3
-import uuid
+```csharp
+// Generate pre-signed upload URL — client uploads directly to S3
+using Amazon.S3;
+using Amazon.S3.Model;
+using System;
+using System.Threading.Tasks;
 
-s3 = boto3.client('s3', region_name='us-east-1')
-BUCKET = "my-file-storage"
+public class S3UploadService
+{
+    private readonly IAmazonS3 _s3Client;
+    private const string Bucket = "my-file-storage";
 
-def create_upload_url(user_id: int, filename: str, content_type: str) -> dict:
-    """
-    Returns a pre-signed URL the client uses to upload directly to S3.
-    Our server never touches the file bytes.
-    """
-    storage_key = f"uploads/{user_id}/{uuid.uuid4()}/{filename}"
+    public async Task<(string uploadUrl, string storageKey)> CreateUploadUrlAsync(
+        int userId,
+        string filename,
+        string contentType)
+    {
+        // Returns a pre-signed URL the client uses to upload directly to S3.
+        // Our server never touches the file bytes.
+        
+        string storageKey = $"uploads/{userId}/{Guid.NewGuid()}/{filename}";
 
-    presigned_url = s3.generate_presigned_url(
-        ClientMethod='put_object',
-        Params={
-            'Bucket': BUCKET,
-            'Key': storage_key,
-            'ContentType': content_type,
-        },
-        ExpiresIn=3600  # URL valid for 1 hour
-    )
+        var request = new GetPreSignedUrlRequest
+        {
+            BucketName = Bucket,
+            Key = storageKey,
+            ContentType = contentType,
+            Verb = HttpVerb.PUT,
+            Expires = DateTime.UtcNow.AddHours(1)
+        };
 
-    return {
-        "upload_url": presigned_url,
-        "storage_key": storage_key
+        string presignedUrl = _s3Client.GetPreSignedURL(request);
+
+        return (presignedUrl, storageKey);
     }
 
-def confirm_upload(user_id: int, storage_key: str, filename: str, size_bytes: int, db):
-    """Called by client after upload succeeds — store metadata in DB."""
-    db.execute(
-        "INSERT INTO files (user_id, storage_key, filename, size_bytes) VALUES (%s, %s, %s, %s)",
-        user_id, storage_key, filename, size_bytes
-    )
+    public async Task ConfirmUploadAsync(
+        int userId,
+        string storageKey,
+        string filename,
+        long sizeBytes,
+        IFileRepository db)
+    {
+        // Called by client after upload succeeds — store metadata in DB
+        await db.InsertFileAsync(userId, storageKey, filename, sizeBytes);
+    }
+}
 ```
 
-```python
-# Content-addressable storage for deduplication
-import hashlib
-import boto3
+```csharp
+// Content-addressable storage for deduplication
+using Amazon.S3;
+using Amazon.S3.Model;
+using System;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.Tasks;
 
-s3 = boto3.client('s3', region_name='us-east-1')
-BUCKET = "my-file-storage"
+public class DedupUploadService
+{
+    private readonly IAmazonS3 _s3Client;
+    private const string Bucket = "my-file-storage";
 
-def upload_with_dedup(file_bytes: bytes, user_id: int, filename: str, db) -> dict:
-    """
-    Use SHA-256 of content as storage key.
-    If two users upload identical files, only one copy is stored.
-    """
-    content_hash = hashlib.sha256(file_bytes).hexdigest()
-    storage_key = f"content/{content_hash}"
+    public async Task<(int fileId, string storageKey)> UploadWithDedupAsync(
+        byte[] fileBytes,
+        int userId,
+        string filename,
+        IFileRepository db)
+    {
+        // Use SHA-256 of content as storage key.
+        // If two users upload identical files, only one copy is stored.
+        
+        using (var sha256 = SHA256.Create())
+        {
+            byte[] hash = sha256.ComputeHash(fileBytes);
+            string contentHash = BitConverter.ToString(hash).Replace("-", "").ToLower();
+            string storageKey = $"content/{contentHash}";
 
-    # Check if this exact file already exists
-    existing = db.query(
-        "SELECT storage_key FROM files WHERE content_hash = %s LIMIT 1",
-        content_hash
-    )
+            // Check if this exact file already exists
+            var existing = await db.GetFileByHashAsync(contentHash);
 
-    if not existing:
-        # New unique file — upload to object store
-        s3.put_object(Bucket=BUCKET, Key=storage_key, Body=file_bytes)
+            if (existing == null)
+            {
+                // New unique file — upload to object store
+                await _s3Client.PutObjectAsync(new PutObjectRequest
+                {
+                    BucketName = Bucket,
+                    Key = storageKey,
+                    InputStream = new System.IO.MemoryStream(fileBytes)
+                });
+            }
 
-    # Always create a new metadata record for this user's file
-    file_id = db.execute(
-        "INSERT INTO files (user_id, storage_key, content_hash, filename) VALUES (%s, %s, %s, %s)",
-        user_id, storage_key, content_hash, filename
-    )
-    return {"file_id": file_id, "storage_key": storage_key}
+            // Always create a new metadata record for this user's file
+            int fileId = await db.InsertFileAsync(userId, storageKey, filename, contentHash);
+            return (fileId, storageKey);
+        }
+    }
+}
 ```
 
-```python
-# Multipart upload for large files (>100MB)
-import boto3
+```csharp
+// Multipart upload for large files (>100MB)
+using Amazon.S3;
+using Amazon.S3.Model;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 
-s3 = boto3.client('s3', region_name='us-east-1')
-BUCKET = "my-file-storage"
-CHUNK_SIZE = 5 * 1024 * 1024  # 5MB minimum part size for S3
+public class MultipartUploadService
+{
+    private readonly IAmazonS3 _s3Client;
+    private const string Bucket = "my-file-storage";
+    private const int ChunkSize = 5 * 1024 * 1024;  // 5MB minimum part size for S3
 
-def multipart_upload(file_path: str, storage_key: str):
-    """Upload large file in parallel chunks."""
-    response = s3.create_multipart_upload(Bucket=BUCKET, Key=storage_key)
-    upload_id = response['UploadId']
+    public async Task MultipartUploadAsync(string filePath, string storageKey)
+    {
+        // Upload large file in parallel chunks
+        var initResponse = await _s3Client.InitiateMultipartUploadAsync(
+            new InitiateMultipartUploadRequest
+            {
+                BucketName = Bucket,
+                Key = storageKey
+            }
+        );
+        string uploadId = initResponse.UploadId;
 
-    parts = []
-    with open(file_path, 'rb') as f:
-        part_number = 1
-        while True:
-            chunk = f.read(CHUNK_SIZE)
-            if not chunk:
-                break
+        var parts = new List<PartETag>();
+        using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+        {
+            int partNumber = 1;
+            byte[] buffer = new byte[ChunkSize];
+            int bytesRead;
 
-            part = s3.upload_part(
-                Bucket=BUCKET,
-                Key=storage_key,
-                UploadId=upload_id,
-                PartNumber=part_number,
-                Body=chunk
-            )
-            parts.append({'PartNumber': part_number, 'ETag': part['ETag']})
-            part_number += 1
+            while ((bytesRead = fileStream.Read(buffer, 0, ChunkSize)) > 0)
+            {
+                var uploadPartResponse = await _s3Client.UploadPartAsync(
+                    new UploadPartRequest
+                    {
+                        BucketName = Bucket,
+                        Key = storageKey,
+                        UploadId = uploadId,
+                        PartNumber = partNumber,
+                        InputStream = new MemoryStream(buffer, 0, bytesRead)
+                    }
+                );
+                parts.Add(new PartETag
+                {
+                    PartNumber = partNumber,
+                    ETag = uploadPartResponse.ETag
+                });
+                partNumber++;
+            }
+        }
 
-    # Assemble the parts
-    s3.complete_multipart_upload(
-        Bucket=BUCKET,
-        Key=storage_key,
-        UploadId=upload_id,
-        MultipartUpload={'Parts': parts}
-    )
+        // Assemble the parts
+        await _s3Client.CompleteMultipartUploadAsync(
+            new CompleteMultipartUploadRequest
+            {
+                BucketName = Bucket,
+                Key = storageKey,
+                UploadId = uploadId,
+                PartETags = parts
+            }
+        );
+    }
+}
 ```
 
 ```sql

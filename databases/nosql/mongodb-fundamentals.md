@@ -19,206 +19,272 @@ MongoDB stores documents — BSON objects — in collections. No fixed schema me
 ## The Code
 
 **Connecting and basic CRUD**
-```python
-from pymongo import MongoClient
-from bson import ObjectId
+```csharp
+using MongoDB.Driver;
+using MongoDB.Bson;
 
-client = MongoClient("mongodb://localhost:27017")
-db     = client["shopdb"]
-col    = db["products"]
+var client = new MongoClient("mongodb://localhost:27017");
+var db = client.GetDatabase("shopdb");
+var col = db.GetCollection<BsonDocument>("products");
 
-# Insert
-result = col.insert_one({
-    "name":  "Laptop",
-    "brand": "Dell",
-    "price": 1200,
-    "specs": {"ram_gb": 16, "ssd_gb": 512},
-    "tags":  ["portable", "work"]
-})
-print(result.inserted_id)   # ObjectId("...")
+// Insert
+var result = col.InsertOne(new BsonDocument
+{
+    { "name", "Laptop" },
+    { "brand", "Dell" },
+    { "price", 1200 },
+    { "specs", new BsonDocument { { "ram_gb", 16 }, { "ssd_gb", 512 } } },
+    { "tags", new BsonArray { "portable", "work" } }
+});
+Console.WriteLine(result.InsertedId);   // ObjectId(...)
 
-# Insert many
-col.insert_many([
-    {"name": "Phone",  "brand": "Apple", "price": 999},
-    {"name": "Tablet", "brand": "Apple", "price": 799},
-])
+// Insert many
+col.InsertMany(new[]
+{
+    new BsonDocument { { "name", "Phone" }, { "brand", "Apple" }, { "price", 999 } },
+    new BsonDocument { { "name", "Tablet" }, { "brand", "Apple" }, { "price", 799 } }
+});
 
-# Find one
-doc = col.find_one({"name": "Laptop"})
+// Find one
+var doc = col.Find(Builders<BsonDocument>.Filter.Eq("name", "Laptop")).FirstOrDefault();
 
-# Find many — returns a cursor, not a list
-for doc in col.find({"brand": "Apple"}):
-    print(doc["name"])
+// Find many
+foreach (var product in col.Find(Builders<BsonDocument>.Filter.Eq("brand", "Apple")).ToList())
+{
+    Console.WriteLine(product["name"]);
+}
 
-# Update one — $set only changes specified fields
-col.update_one(
-    {"name": "Laptop"},
-    {"$set": {"price": 1100, "specs.ram_gb": 32}}
-)
+// Update one — $set only changes specified fields
+col.UpdateOne(
+    Builders<BsonDocument>.Filter.Eq("name", "Laptop"),
+    Builders<BsonDocument>.Update.Set("price", 1100).Set("specs.ram_gb", 32)
+);
 
-# Update many
-col.update_many(
-    {"brand": "Apple"},
-    {"$inc": {"price": -50}}    # decrement price by 50
-)
+// Update many
+col.UpdateMany(
+    Builders<BsonDocument>.Filter.Eq("brand", "Apple"),
+    Builders<BsonDocument>.Update.Inc("price", -50)    // decrement price by 50
+);
 
-# Delete
-col.delete_one({"name": "Tablet"})
+// Delete
+col.DeleteOne(Builders<BsonDocument>.Filter.Eq("name", "Tablet"));
 ```
 
 **Query operators**
-```python
-# Comparison
-col.find({"price": {"$gte": 500, "$lte": 1500}})
+```csharp
+// Comparison
+col.Find(Builders<BsonDocument>.Filter.And(
+    Builders<BsonDocument>.Filter.Gte("price", 500),
+    Builders<BsonDocument>.Filter.Lte("price", 1500)
+));
 
-# Array contains
-col.find({"tags": "portable"})          # exact element match
-col.find({"tags": {"$all": ["portable", "work"]}})  # all elements present
+// Array contains
+col.Find(Builders<BsonDocument>.Filter.Eq("tags", "portable"));  // exact element match
+col.Find(Builders<BsonDocument>.Filter.All("tags", new[] { "portable", "work" }));  // all elements present
 
-# Nested field — dot notation
-col.find({"specs.ram_gb": {"$gte": 16}})
+// Nested field — dot notation
+col.Find(Builders<BsonDocument>.Filter.Gte("specs.ram_gb", 16));
 
-# OR
-col.find({"$or": [{"brand": "Dell"}, {"brand": "Apple"}]})
+// OR
+col.Find(Builders<BsonDocument>.Filter.Or(
+    Builders<BsonDocument>.Filter.Eq("brand", "Dell"),
+    Builders<BsonDocument>.Filter.Eq("brand", "Apple")
+));
 
-# Field existence
-col.find({"discount": {"$exists": True}})
+// Field existence
+col.Find(Builders<BsonDocument>.Filter.Exists("discount", true));
 
-# Regex
-col.find({"name": {"$regex": "^lap", "$options": "i"}})
+// Regex
+col.Find(Builders<BsonDocument>.Filter.Regex("name", "^lap"));
 ```
 
 **Projection — return only needed fields**
-```python
-# 1 = include, 0 = exclude. Can't mix include/exclude except for _id
-col.find(
-    {"brand": "Apple"},
-    {"name": 1, "price": 1, "_id": 0}   # return name and price only
-)
+```csharp
+// 1 = include, 0 = exclude. Can't mix include/exclude except for _id
+var projection = Builders<BsonDocument>.Projection
+    .Include("name")
+    .Include("price")
+    .Exclude("_id");
+
+col.Find(Builders<BsonDocument>.Filter.Eq("brand", "Apple"))
+   .Project(projection)
+   .ToList();   // return name and price only
 ```
 
 **Sorting, limiting, skipping**
-```python
-# Sort by price descending, take top 5
-col.find().sort("price", -1).limit(5)
+```csharp
+// Sort by price descending, take top 5
+col.Find(FilterDefinition<BsonDocument>.Empty)
+   .Sort(Builders<BsonDocument>.Sort.Descending("price"))
+   .Limit(5)
+   .ToList();
 
-# Pagination — skip is inefficient on large collections; use range queries instead
-col.find().sort("_id", 1).skip(20).limit(10)
+// Pagination -- skip is inefficient on large collections; use range queries instead
+col.Find(FilterDefinition<BsonDocument>.Empty)
+   .Sort(Builders<BsonDocument>.Sort.Ascending("_id"))
+   .Skip(20)
+   .Limit(10)
+   .ToList();
 
-# Better pagination — range on _id or a timestamp field
-last_id = ObjectId("...")
-col.find({"_id": {"$gt": last_id}}).sort("_id", 1).limit(10)
+// Better pagination -- range on _id or a timestamp field
+var lastId = ObjectId.Parse("...");
+col.Find(Builders<BsonDocument>.Filter.Gt("_id", lastId))
+   .Sort(Builders<BsonDocument>.Sort.Ascending("_id"))
+   .Limit(10)
+   .ToList();
 ```
 
 **Indexing**
-```python
-from pymongo import ASCENDING, DESCENDING, TEXT
+```csharp
+using MongoDB.Driver;
 
-# Single field
-col.create_index("brand")
+// Single field
+col.Indexes.CreateOne(new CreateIndexModel<BsonDocument>(
+    Builders<BsonDocument>.IndexKeys.Ascending("brand")
+));
 
-# Compound — order matters for query and sort alignment
-col.create_index([("brand", ASCENDING), ("price", DESCENDING)])
+// Compound — order matters for query and sort alignment
+col.Indexes.CreateOne(new CreateIndexModel<BsonDocument>(
+    Builders<BsonDocument>.IndexKeys.Ascending("brand").Descending("price")
+));
 
-# Unique
-col.create_index("email", unique=True)
+// Unique
+col.Indexes.CreateOne(new CreateIndexModel<BsonDocument>(
+    Builders<BsonDocument>.IndexKeys.Ascending("email"),
+    new CreateIndexOptions { Unique = true }
+));
 
-# Text index — full-text search (one per collection)
-col.create_index([("name", TEXT), ("description", TEXT)])
-col.find({"$text": {"$search": "laptop dell"}})
+// Text index — full-text search (one per collection)
+col.Indexes.CreateOne(new CreateIndexModel<BsonDocument>(
+    Builders<BsonDocument>.IndexKeys.Text("name").Text("description")
+));
+col.Find(Builders<BsonDocument>.Filter.Text("laptop dell"));
 
-# Partial index — only index documents matching a filter
-col.create_index(
-    "discount",
-    partialFilterExpression={"discount": {"$exists": True}}
-)
+// Partial index — only index documents matching a filter
+col.Indexes.CreateOne(new CreateIndexModel<BsonDocument>(
+    Builders<BsonDocument>.IndexKeys.Ascending("discount"),
+    new CreateIndexOptions
+    {
+        PartialFilterExpression = Builders<BsonDocument>.Filter.Exists("discount", true)
+    }
+));
 
-# Check existing indexes
-col.index_information()
+// Check existing indexes
+var indexList = col.Indexes.List();
 ```
 
 **Aggregation pipeline**
-```python
-# Pipeline: sequence of stages, each transforms the document stream
-pipeline = [
-    # Stage 1: filter
-    {"$match": {"brand": "Apple"}},
+```csharp
+// Pipeline: sequence of stages, each transforms the document stream
+var pipeline = new[]
+{
+    // Stage 1: filter
+    new BsonDocument("$match", new BsonDocument("brand", "Apple")),
 
-    # Stage 2: group and compute
-    {"$group": {
-        "_id":       "$brand",
-        "avg_price": {"$avg": "$price"},
-        "count":     {"$sum": 1},
-        "max_price": {"$max": "$price"},
-    }},
+    // Stage 2: group and compute
+    new BsonDocument("$group", new BsonDocument
+    {
+        { "_id", "$brand" },
+        { "avg_price", new BsonDocument("$avg", "$price") },
+        { "count", new BsonDocument("$sum", 1) },
+        { "max_price", new BsonDocument("$max", "$price") },
+    }),
 
-    # Stage 3: sort result
-    {"$sort": {"avg_price": -1}},
+    // Stage 3: sort result
+    new BsonDocument("$sort", new BsonDocument("avg_price", -1)),
 
-    # Stage 4: reshape output
-    {"$project": {
-        "brand":     "$_id",
-        "avg_price": {"$round": ["$avg_price", 2]},
-        "count":     1,
-        "_id":       0
-    }}
-]
+    // Stage 4: reshape output
+    new BsonDocument("$project", new BsonDocument
+    {
+        { "brand", "$_id" },
+        { "avg_price", new BsonDocument("$round", new BsonArray { "$avg_price", 2 }) },
+        { "count", 1 },
+        { "_id", 0 }
+    })
+};
 
-list(col.aggregate(pipeline))
+col.Aggregate<BsonDocument>(pipeline).ToList();
 ```
 
 **Embed vs reference — the core modeling decision**
-```python
-# EMBED: address always read with user, never updated independently
+```csharp
+// EMBED: address always read with user, never updated independently
+var userEmbedded = new BsonDocument
 {
-    "_id":  ObjectId("..."),
-    "name": "Ali",
-    "address": {            # embedded — one document, one read
-        "street": "123 Main St",
-        "city":   "Cairo",
-    }
-}
-
-# REFERENCE: orders are many, large, queried independently
-{
-    "_id":      ObjectId("..."),
-    "name":     "Ali",
-    "order_ids": [ObjectId("..."), ObjectId("...")]  # reference by ID
-}
-# Fetch orders separately — MongoDB has no JOIN, you do it in app code
-# or use $lookup in aggregation
-orders = db.orders.find({"_id": {"$in": user["order_ids"]}})
-
-# $lookup — left outer join in aggregation (use sparingly)
-pipeline = [
-    {"$match": {"name": "Ali"}},
-    {"$lookup": {
-        "from":         "orders",
-        "localField":   "order_ids",
-        "foreignField": "_id",
-        "as":           "orders"
+    { "_id", ObjectId.GenerateNewId() },
+    { "name", "Ali" },
+    { "address", new BsonDocument              // embedded — one document, one read
+    {
+        { "street", "123 Main St" },
+        { "city", "Cairo" }
     }}
-]
+};
+
+// REFERENCE: orders are many, large, queried independently
+var userReferenced = new BsonDocument
+{
+    { "_id", ObjectId.GenerateNewId() },
+    { "name", "Ali" },
+    { "order_ids", new BsonArray              // reference by ID
+    {
+        ObjectId.GenerateNewId(),
+        ObjectId.GenerateNewId()
+    }}
+};
+
+// Fetch orders separately — MongoDB has no JOIN, you do it in app code
+// or use $lookup in aggregation
+var userOrderIds = userReferenced["order_ids"].AsBsonArray.Cast<ObjectId>().ToList();
+var orders = db.GetCollection<BsonDocument>("orders")
+    .Find(Builders<BsonDocument>.Filter.In("_id", userOrderIds))
+    .ToList();
+
+// $lookup — left outer join in aggregation (use sparingly)
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument("name", "Ali")),
+    new BsonDocument("$lookup", new BsonDocument
+    {
+        { "from", "orders" },
+        { "localField", "order_ids" },
+        { "foreignField", "_id" },
+        { "as", "orders" }
+    })
+};
 ```
 
 **Multi-document transactions**
-```python
-# Use only when you must update multiple documents atomically
-# Slower than single-document ops — avoid in hot paths
+```csharp
+// Use only when you must update multiple documents atomically
+// Slower than single-document ops -- avoid in hot paths
 
-with client.start_session() as session:
-    with session.start_transaction():
-        db.accounts.update_one(
-            {"_id": from_id},
-            {"$inc": {"balance": -amount}},
-            session=session
-        )
-        db.accounts.update_one(
-            {"_id": to_id},
-            {"$inc": {"balance": amount}},
-            session=session
-        )
-        # Both commit or both roll back
+using (var session = client.StartSession())
+{
+    session.StartTransaction();
+    try
+    {
+        var accountsCol = db.GetCollection<BsonDocument>("accounts");
+        
+        accountsCol.UpdateOne(
+            session,
+            Builders<BsonDocument>.Filter.Eq("_id", fromId),
+            Builders<BsonDocument>.Update.Inc("balance", -amount)
+        );
+        
+        accountsCol.UpdateOne(
+            session,
+            Builders<BsonDocument>.Filter.Eq("_id", toId),
+            Builders<BsonDocument>.Update.Inc("balance", amount)
+        );
+        
+        session.CommitTransaction();  // Both commit or both roll back
+    }
+    catch
+    {
+        session.AbortTransaction();
+        throw;
+    }
+}
 ```
 
 ---

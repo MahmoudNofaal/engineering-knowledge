@@ -16,96 +16,119 @@ Every integer is stored in binary. Bitwise operators work on each bit position i
 ## The Code
 
 **Core operations reference**
-```python
-n = 0b1010  # 10 in decimal
+```csharp
+int n = 0b1010;  // 10 in decimal
 
-# Check if bit i is set
-def is_set(n: int, i: int) -> bool:
-    return (n >> i) & 1 == 1
+// Check if bit i is set
+bool IsSet(int n, int i) => ((n >> i) & 1) == 1;
 
-# Set bit i
-def set_bit(n: int, i: int) -> int:
-    return n | (1 << i)
+// Set bit i
+int SetBit(int n, int i) => n | (1 << i);
 
-# Clear bit i
-def clear_bit(n: int, i: int) -> int:
-    return n & ~(1 << i)
+// Clear bit i
+int ClearBit(int n, int i) => n & ~(1 << i);
 
-# Toggle bit i
-def toggle_bit(n: int, i: int) -> int:
-    return n ^ (1 << i)
+// Toggle bit i
+int ToggleBit(int n, int i) => n ^ (1 << i);
 
-# Clear lowest set bit — key trick
-def clear_lowest(n: int) -> int:
-    return n & (n - 1)
+// Clear lowest set bit — key trick
+int ClearLowest(int n) => n & (n - 1);
 
-# Isolate lowest set bit
-def lowest_set_bit(n: int) -> int:
-    return n & (-n)
+// Isolate lowest set bit
+int LowestSetBit(int n) => n & (-n);
 ```
 
 **Check power of 2 — O(1)**
-```python
-def is_power_of_two(n: int) -> bool:
-    return n > 0 and (n & (n - 1)) == 0
-    # A power of 2 has exactly one set bit.
-    # n-1 flips all bits below that bit and clears it.
-    # n & (n-1) == 0 only when n has exactly one set bit.
+```csharp
+public static bool IsPowerOfTwo(int n)
+{
+    return n > 0 && (n & (n - 1)) == 0;
+    // A power of 2 has exactly one set bit.
+    // n-1 flips all bits below that bit and clears it.
+    // n & (n-1) == 0 only when n has exactly one set bit.
+}
 ```
 
 **Count set bits (Hamming weight) — Brian Kernighan**
-```python
-def count_bits(n: int) -> int:
-    count = 0
-    while n:
-        n &= n - 1    # clear lowest set bit
-        count += 1
-    return count      # O(number of set bits), not O(32)
+```csharp
+public static int CountBits(int n)
+{
+    int count = 0;
+    while (n > 0)
+    {
+        n &= n - 1;    // clear lowest set bit
+        count++;
+    }
+    return count;      // O(number of set bits), not O(32)
+}
 ```
 
 **Single number — XOR to find unpaired element**
-```python
-def single_number(nums: list) -> int:
-    result = 0
-    for n in nums:
-        result ^= n   # paired numbers cancel (a^a=0), lone number remains
-    return result
+```csharp
+public static int SingleNumber(int[] nums)
+{
+    int result = 0;
+    foreach (int n in nums)
+        result ^= n;   // paired numbers cancel (a^a=0), lone number remains
+    return result;
+}
 ```
 
 **Single number III — two distinct unpaired elements**
-```python
-def single_number_iii(nums: list) -> list:
-    xor = 0
-    for n in nums: xor ^= n          # xor = a ^ b (the two single numbers)
-    diff_bit = xor & (-xor)          # isolate any bit where a and b differ
-    a = b = 0
-    for n in nums:
-        if n & diff_bit:
-            a ^= n                   # group by the differing bit
-        else:
-            b ^= n
-    return [a, b]
+```csharp
+public static int[] SingleNumberIII(int[] nums)
+{
+    int xor = 0;
+    foreach (int n in nums) 
+        xor ^= n;                   // xor = a ^ b (the two single numbers)
+    
+    int diffBit = xor & (-xor);     // isolate any bit where a and b differ
+    int a = 0, b = 0;
+    
+    foreach (int n in nums)
+    {
+        if ((n & diffBit) != 0)
+            a ^= n;                 // group by the differing bit
+        else
+            b ^= n;
+    }
+    return new[] { a, b };
+}
 ```
 
 **Subsets via bitmask — enumerate all 2^n subsets**
-```python
-def subsets_bitmask(nums: list) -> list:
-    n = len(nums)
-    result = []
-    for mask in range(1 << n):           # 0 to 2^n - 1
-        subset = [nums[i] for i in range(n) if mask & (1 << i)]
-        result.append(subset)
-    return result
+```csharp
+public static List<List<int>> SubsetsBitmask(int[] nums)
+{
+    int n = nums.Length;
+    var result = new List<List<int>>();
+    
+    for (int mask = 0; mask < (1 << n); mask++)
+    {
+        var subset = new List<int>();
+        for (int i = 0; i < n; i++)
+        {
+            if ((mask & (1 << i)) != 0)
+                subset.Add(nums[i]);
+        }
+        result.Add(subset);
+    }
+    return result;
+}
 ```
 
 **Reverse bits of a 32-bit integer**
-```python
-def reverse_bits(n: int) -> int:
-    result = 0
-    for _ in range(32):
-        result = (result << 1) | (n & 1)  # take LSB of n, append to result
-        n >>= 1
-    return result
+```csharp
+public int ReverseBits(int n)
+{
+    int result = 0;
+    for (int i = 0; i < 32; i++)
+    {
+        result = (result << 1) | (n & 1);  // take LSB of n, append to result
+        n >>= 1;
+    }
+    return result;
+}
 ```
 
 ---

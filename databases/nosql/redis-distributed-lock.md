@@ -19,187 +19,257 @@ A distributed lock has three requirements: only one owner at a time, automatic r
 ## The Code
 
 **Single-node lock — production correct**
-```python
-import redis
-import uuid
-import time
+```csharp
+using StackExchange.Redis;
+using System;
 
-r = redis.Redis(decode_responses=True)
+public class RedisLockManager
+{
+    private readonly IDatabase _db;
+    private const string UNLOCK_SCRIPT = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
-UNLOCK_SCRIPT = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-"""
+    public RedisLockManager(IDatabase db)
+    {
+        _db = db;
+    }
 
-def acquire_lock(resource: str, ttl: int = 10) -> str | None:
-    """
-    Returns a lock token if acquired, None if not.
-    ttl: seconds before lock auto-releases (must exceed critical section duration)
-    """
-    token = str(uuid.uuid4())
-    key   = f"lock:{resource}"
+    /// <summary>
+    /// Returns a lock token if acquired, null if not.
+    /// ttl: seconds before lock auto-releases (must exceed critical section duration)
+    /// </summary>
+    public string? AcquireLock(string resource, int ttl = 10)
+    {
+        string token = Guid.NewGuid().ToString();
+        string key = $"lock:{resource}";
 
-    # SET NX EX is atomic — no gap between existence check and TTL set
-    acquired = r.set(key, token, nx=True, ex=ttl)
-    return token if acquired else None
+        // SET NX EX is atomic — no gap between existence check and TTL set
+        bool acquired = _db.StringSet(key, token, TimeSpan.FromSeconds(ttl), When.NotExists);
+        return acquired ? token : null;
+    }
 
-def release_lock(resource: str, token: str) -> bool:
-    """
-    Only releases the lock if we still own it.
-    Returns True if released, False if already expired or stolen.
-    """
-    key = f"lock:{resource}"
-    result = r.eval(UNLOCK_SCRIPT, 1, key, token)
-    return bool(result)
+    /// <summary>
+    /// Only releases the lock if we still own it.
+    /// Returns true if released, false if already expired or stolen.
+    /// </summary>
+    public bool ReleaseLock(string resource, string token)
+    {
+        string key = $"lock:{resource}";
+        var result = _db.ScriptEvaluate(UNLOCK_SCRIPT, new RedisKey[] { key }, new RedisValue[] { token });
+        return (int)result > 0;
+    }
+}
 
-# Usage — manual
-token = acquire_lock("payment:user:42", ttl=15)
-if token is None:
-    raise Exception("Could not acquire lock — another process holds it")
-try:
-    process_payment()
-finally:
-    release_lock("payment:user:42", token)
+// Usage — manual
+var db = ConnectionMultiplexer.Connect("localhost:6379").GetDatabase();
+var lockMgr = new RedisLockManager(db);
+string? token = lockMgr.AcquireLock("payment:user:42", ttl: 15);
+if (token == null)
+    throw new Exception("Could not acquire lock — another process holds it");
+try
+{
+    // ProcessPayment();
+}
+finally
+{
+    lockMgr.ReleaseLock("payment:user:42", token);
+}
 ```
 
 **Context manager — cleaner usage**
-```python
-from contextlib import contextmanager
+```csharp
+using System;
+using StackExchange.Redis;
 
-@contextmanager
-def redis_lock(resource: str, ttl: int = 10, retry: int = 3, delay: float = 0.1):
-    token = None
-    for attempt in range(retry):
-        token = acquire_lock(resource, ttl)
-        if token:
-            break
-        time.sleep(delay * (attempt + 1))   # linear backoff
+public class RedisLock : IDisposable
+{
+    private readonly RedisLockManager _lockMgr;
+    private readonly string _resource;
+    private readonly int _ttl;
+    private string? _token;
 
-    if token is None:
-        raise TimeoutError(f"Failed to acquire lock for: {resource}")
+    public RedisLock(RedisLockManager lockMgr, string resource, int ttl = 10)
+    {
+        _lockMgr = lockMgr;
+        _resource = resource;
+        _ttl = ttl;
+    }
 
-    try:
-        yield token
-    finally:
-        release_lock(resource, token)
+    public void Acquire(int retries = 3, float delay = 0.1f)
+    {
+        for (int attempt = 0; attempt < retries; attempt++)
+        {
+            _token = _lockMgr.AcquireLock(_resource, _ttl);
+            if (_token != null)
+                return;
+            System.Threading.Thread.Sleep((int)(delay * (attempt + 1) * 1000));
+        }
+        throw new TimeoutException($"Failed to acquire lock for: {_resource}");
+    }
 
-# Usage
-with redis_lock("inventory:item:88", ttl=10):
-    decrement_inventory(item_id=88)
+    public void Dispose()
+    {
+        if (_token != null)
+            _lockMgr.ReleaseLock(_resource, _token);
+    }
+}
+
+// Usage
+var lockMgr = new RedisLockManager(db);
+using (var @lock = new RedisLock(lockMgr, "inventory:item:88", ttl: 10))
+{
+    @lock.Acquire();
+    // DecrementInventory(itemId: 88);
+}
 ```
 
 **Watchdog — extend TTL if work takes longer than expected**
-```python
-import threading
+```csharp
+using StackExchange.Redis;
+using System;
+using System.Threading;
 
-class WatchdogLock:
-    def __init__(self, r, resource: str, ttl: int = 10):
-        self.r        = r
-        self.key      = f"lock:{resource}"
-        self.ttl      = ttl
-        self.token    = None
-        self._stop    = threading.Event()
-        self._thread  = None
+public class WatchdogLock
+{
+    private readonly IDatabase _db;
+    private string _key;  
+    private int _ttl;
+    private string? _token;
+    private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+    private Thread? _watchdogThread;
+    private const string UNLOCK_SCRIPT = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
-    def acquire(self) -> bool:
-        self.token = str(uuid.uuid4())
-        acquired = self.r.set(self.key, self.token, nx=True, ex=self.ttl)
-        if acquired:
-            self._start_watchdog()
-        return bool(acquired)
+    public WatchdogLock(IDatabase db, string resource, int ttl = 10)
+    {
+        _db = db;
+        _key = $"lock:{resource}";
+        _ttl = ttl;
+    }
 
-    def _start_watchdog(self):
-        def renew():
-            # Renew at 1/3 of TTL interval so there's always headroom
-            interval = self.ttl / 3
-            while not self._stop.wait(interval):
-                # Only extend if we still own the lock
-                current = self.r.get(self.key)
-                if current == self.token:
-                    self.r.expire(self.key, self.ttl)
-                else:
-                    break   # lock was lost — stop renewing
+    public bool Acquire()
+    {
+        _token = Guid.NewGuid().ToString();
+        bool acquired = _db.StringSet(_key, _token, TimeSpan.FromSeconds(_ttl), When.NotExists);
+        if (acquired)
+            StartWatchdog();
+        return acquired;
+    }
 
-        self._thread = threading.Thread(target=renew, daemon=True)
-        self._thread.start()
+    private void StartWatchdog()
+    {
+        void Renew()
+        {
+            // Renew at 1/3 of TTL interval so there's always headroom
+            int interval = _ttl / 3;
+            while (!_cts.Token.WaitHandle.WaitOne(interval * 1000))
+            {
+                // Only extend if we still own the lock
+                var current = _db.StringGet(_key);
+                if (current == _token)
+                    _db.KeyExpire(_key, TimeSpan.FromSeconds(_ttl));
+                else
+                    break;  // lock was lost — stop renewing
+            }
+        }
+        _watchdogThread = new Thread(Renew) { IsBackground = true };
+        _watchdogThread.Start();
+    }
 
-    def release(self):
-        self._stop.set()
-        release_lock(self.key.removeprefix("lock:"), self.token)
-
-    def __enter__(self):
-        if not self.acquire():
-            raise TimeoutError(f"Could not acquire: {self.key}")
-        return self
-
-    def __exit__(self, *_):
-        self.release()
+    public void Release()
+    {
+        _cts.Cancel();
+        if (_token != null)
+        {
+            var result = _db.ScriptEvaluate(UNLOCK_SCRIPT, new RedisKey[] { _key }, new RedisValue[] { _token });
+        }
+    }
+}
 ```
 
 **Redlock — multi-node lock for failure tolerance**
-```python
-# Redlock: acquire on majority of N independent Redis nodes
-# If Redis master fails, a single-node lock can be acquired twice.
-# Redlock requires a majority (N//2 + 1) to consider the lock held.
+```csharp
+using StackExchange.Redis;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 
-import time
+public class RedlockManager
+{
+    private readonly IDatabase[] _nodes;
+    private const string UNLOCK_SCRIPT = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
-nodes = [
-    redis.Redis(host="redis-1", decode_responses=True),
-    redis.Redis(host="redis-2", decode_responses=True),
-    redis.Redis(host="redis-3", decode_responses=True),
-]
+    public RedlockManager(params IDatabase[] dbs)
+    {
+        _nodes = dbs;
+    }
 
-def redlock_acquire(resource: str, ttl: int = 10) -> tuple[str, int] | None:
-    token      = str(uuid.uuid4())
-    key        = f"lock:{resource}"
-    quorum     = len(nodes) // 2 + 1
-    start      = time.monotonic()
-    acquired   = 0
+    public (string token, int validityMs)? AcquireLock(string resource, int ttl = 10)
+    {
+        string token = Guid.NewGuid().ToString();
+        string key = $"lock:{resource}";
+        int quorum = _nodes.Length / 2 + 1;
+        int acquired = 0;
+        var sw = Stopwatch.StartNew();
 
-    for node in nodes:
-        try:
-            if node.set(key, token, nx=True, ex=ttl):
-                acquired += 1
-        except redis.RedisError:
-            pass   # treat node failure as a non-acquire
+        foreach (var node in _nodes)
+        {
+            try
+            {
+                if (node.StringSet(key, token, TimeSpan.FromSeconds(ttl), When.NotExists))
+                    acquired++;
+            }
+            catch (Exception)
+            {
+                // treat node failure as a non-acquire
+            }
+        }
 
-    elapsed     = time.monotonic() - start
-    validity_ms = int(ttl * 1000 - elapsed * 1000)
+        sw.Stop();
+        int validityMs = ttl * 1000 - (int)sw.ElapsedMilliseconds;
 
-    if acquired >= quorum and validity_ms > 0:
-        return token, validity_ms   # lock held with remaining validity time
+        if (acquired >= quorum && validityMs > 0)
+            return (token, validityMs);  // lock held with remaining validity time
 
-    # Failed to get quorum — release whatever we did acquire
-    redlock_release(resource, token)
-    return None
+        // Failed to get quorum — release whatever we did acquire
+        ReleaseLock(resource, token);
+        return null;
+    }
 
-def redlock_release(resource: str, token: str):
-    key = f"lock:{resource}"
-    for node in nodes:
-        try:
-            node.eval(UNLOCK_SCRIPT, 1, key, token)
-        except redis.RedisError:
-            pass   # best effort — TTL will clean up
+    public void ReleaseLock(string resource, string token)
+    {
+        string key = $"lock:{resource}";
+        foreach (var node in _nodes)
+        {
+            try
+            {
+                node.ScriptEvaluate(UNLOCK_SCRIPT, new RedisKey[] { key }, new RedisValue[] { token });
+            }
+            catch (Exception)
+            {
+                // best effort — TTL will clean up
+            }
+        }
+    }
+}
 ```
 
 **What goes wrong — failure scenarios in code**
-```python
-# WRONG: two separate commands — crash between them = permanent lock
-r.setnx("lock:payments", token)   # acquires
-r.expire("lock:payments", 10)     # crash here → lock never expires
+```csharp
+// WRONG: two separate commands — crash between them = permanent lock
+db.StringSet("lock:payments", token);    // acquires
+db.KeyExpire("lock:payments", TimeSpan.FromSeconds(10));  // crash here → lock never expires
 
-# WRONG: DEL without ownership check — deletes another owner's lock
-r.delete("lock:payments")         # dangerous if our TTL already expired
+// WRONG: DEL without ownership check — deletes another owner's lock
+db.KeyDelete("lock:payments");  // dangerous if our TTL already expired
 
-# WRONG: checking then deleting — race between check and delete
-if r.get("lock:payments") == token:   # another process could acquire here
-    r.delete("lock:payments")         # we just deleted their lock
+// WRONG: checking then deleting — race between check and delete
+var val = db.StringGet("lock:payments");
+if (val == token)
+{
+    // another process could acquire here
+    db.KeyDelete("lock:payments");  // we just deleted their lock
+}
 
-# CORRECT: atomic SET NX EX + Lua release (shown above)
+// CORRECT: atomic SET NX EX + Lua release (shown above)
 ```
 
 ---

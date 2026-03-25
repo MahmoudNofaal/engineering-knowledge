@@ -35,54 +35,91 @@ WHERE account_id = 'acc_bob';
 COMMIT;
 -- Either both updates are visible to all readers, or neither is. No in-between.
 ```
-```python
-# ── BASE: distributed counter that accepts temporary inconsistency ─────────
-# Example: YouTube view counter. Exact count doesn't matter; approximate is fine.
+```csharp
+// ── BASE: distributed counter that accepts temporary inconsistency ───────────────────
+// Example: YouTube view counter. Exact count doesn't matter; approximate is fine.
 
-import redis
-import uuid
+using StackExchange.Redis;
+using System;
 
-r = redis.Redis()
+public class ViewCounter
+{
+    private readonly IDatabase _cache;
 
-def record_view(video_id: str) -> None:
-    # Each web server increments its local shard — no locking, no coordination
-    shard_key = f"views:{video_id}:{uuid.uuid4().hex[:4]}"  # random shard
-    r.incr(shard_key)
-    # A background job periodically sums all shards into a final count.
-    # During this window, different users see different totals — that's acceptable.
+    public ViewCounter(IDatabase cache) => _cache = cache;
 
-def get_approximate_view_count(video_id: str) -> int:
-    keys = r.keys(f"views:{video_id}:*")
-    return sum(int(r.get(k) or 0) for k in keys)
+    public void RecordView(string videoId)
+    {
+        // Each web server increments its local shard — no locking, no coordination
+        var shardKey = $"views:{videoId}:{Guid.NewGuid().ToString().Substring(0, 4)}";
+        _cache.StringIncrement(shardKey);
+        // A background job periodically sums all shards into a final count.
+        // During this window, different users see different totals — that's acceptable.
+    }
+
+    public long GetApproximateViewCount(string videoId)
+    {
+        var server = _cache.Multiplexer.GetServer(_cache.Multiplexer.GetEndPoints().First());
+        var keys = server.Keys(pattern: $"views:{videoId}:*");
+        long total = 0;
+        foreach (var key in keys)
+        {
+            var value = _cache.StringGet(key);
+            if (value.HasValue && long.TryParse(value.ToString(), out var count))
+                total += count;
+        }
+        return total;
+    }
+}
 ```
-```python
-# ── Comparing isolation levels (ACID spectrum within SQL databases) ────────
+```csharp
+// ── Comparing isolation levels (ACID spectrum within SQL databases) ────────
 
-isolation_levels = {
-    "READ UNCOMMITTED": {
-        "dirty_read":          True,   # can see uncommitted data from other transactions
-        "non_repeatable_read": True,
-        "phantom_read":        True,
-        "use_case":            "Almost never. Dirty reads are almost always a bug.",
+var isolationLevels = new Dictionary<string, Dictionary<string, object>>
+{
+    {
+        "READ UNCOMMITTED", new Dictionary<string, object>
+        {
+            { "dirty_read", true },              // can see uncommitted data from other transactions
+            { "non_repeatable_read", true },
+            { "phantom_read", true },
+            { "use_case", "Almost never. Dirty reads are almost always a bug." },
+        }
     },
-    "READ COMMITTED": {
-        "dirty_read":          False,  # default in PostgreSQL
-        "non_repeatable_read": True,
-        "phantom_read":        True,
-        "use_case":            "Most OLTP workloads where repeatable reads aren't required.",
+    {
+        "READ COMMITTED", new Dictionary<string, object>
+        {
+            { "dirty_read", false },             // default in PostgreSQL
+            { "non_repeatable_read", true },
+            { "phantom_read", true },
+            { "use_case", "Most OLTP workloads where repeatable reads aren't required." },
+        }
     },
-    "REPEATABLE READ": {
-        "dirty_read":          False,
-        "non_repeatable_read": False,
-        "phantom_read":        True,   # MySQL InnoDB actually prevents this via MVCC
-        "use_case":            "Reports that read multiple rows and must see a stable snapshot.",
+    {
+        "REPEATABLE READ", new Dictionary<string, object>
+        {
+            { "dirty_read", false },
+            { "non_repeatable_read", false },
+            { "phantom_read", true },            // MySQL InnoDB actually prevents this via MVCC
+            { "use_case", "Reports that read multiple rows and must see a stable snapshot." },
+        }
     },
-    "SERIALIZABLE": {
-        "dirty_read":          False,
-        "non_repeatable_read": False,
-        "phantom_read":        False,  # full isolation — highest cost
-        "use_case":            "Financial operations, anything where phantom reads cause bugs.",
+    {
+        "SERIALIZABLE", new Dictionary<string, object>
+        {
+            { "dirty_read", false },
+            { "non_repeatable_read", false },
+            { "phantom_read", false },          // full isolation — highest cost
+            { "use_case", "Financial operations, anything where phantom reads cause bugs." },
+        }
     },
+};
+
+foreach (var (level, properties) in isolationLevels)
+{
+    Console.WriteLine($"{level,-20} Dirty: {properties["dirty_read"]}, " +
+                      $"NonRep: {properties["non_repeatable_read"]}, " +
+                      $"Phantom: {properties["phantom_read"]}");
 }
 ```
 

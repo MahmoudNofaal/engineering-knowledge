@@ -20,93 +20,136 @@ For grids: Manhattan distance (|dx| + |dy|) is admissible for 4-directional move
 ## The Code
 
 **A* on a weighted grid — 4-directional movement**
-```python
-import heapq
+```csharp
+using System;
+using System.Collections.Generic;
 
-def a_star(grid: list, start: tuple, end: tuple) -> int:
-    rows, cols = len(grid), len(grid[0])
+public int AStar(int[][] grid, (int, int) start, (int, int) end)
+{
+    int rows = grid.Length, cols = grid[0].Length;
 
-    def heuristic(r: int, c: int) -> int:
-        # Manhattan distance — admissible for 4-directional movement
-        return abs(r - end[0]) + abs(c - end[1])
+    int Heuristic(int r, int c) => Math.Abs(r - end.Item1) + Math.Abs(c - end.Item2);
 
-    dist = [[float('inf')] * cols for _ in range(rows)]
-    dist[start[0]][start[1]] = 0
+    var dist = new Dictionary<(int, int), int>();
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            dist[(r, c)] = int.MaxValue;
+    dist[start] = 0;
 
-    # heap stores (f = g + h, g, row, col)
-    heap = [(heuristic(*start), 0, start[0], start[1])]
+    // PriorityQueue<(r, c), f> — min-heap on f-score
+    var heap = new PriorityQueue<(int r, int c, int g), int>();
+    heap.Enqueue((start.Item1, start.Item2, 0), Heuristic(start.Item1, start.Item2));
 
-    while heap:
-        f, g, r, c = heapq.heappop(heap)
-        if (r, c) == end:
-            return g                       # g is the true cost to end
-        if g > dist[r][c]:
-            continue                       # stale entry
+    while (heap.Count > 0)
+    {
+        var (r, c, g) = heap.Dequeue();
+        if ((r, c) == end)
+            return g;  // g is the true cost to end
+        if (g > dist[(r, c)])
+            continue;  // stale entry
 
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] != -1:
-                new_g = g + grid[nr][nc]   # actual cost to neighbor
-                if new_g < dist[nr][nc]:
-                    dist[nr][nc] = new_g
-                    new_f = new_g + heuristic(nr, nc)
-                    heapq.heappush(heap, (new_f, new_g, nr, nc))
-
-    return -1                              # no path
+        int[][] directions = new int[][] { new int[] { -1, 0 }, new int[] { 1, 0 },
+                                            new int[] { 0, -1 }, new int[] { 0, 1 } };
+        foreach (var dir in directions)
+        {
+            int nr = r + dir[0], nc = c + dir[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] != -1)
+            {
+                int newG = g + grid[nr][nc];
+                if (newG < dist[(nr, nc)])
+                {
+                    dist[(nr, nc)] = newG;
+                    int newF = newG + Heuristic(nr, nc);
+                    heap.Enqueue((nr, nc, newG), newF);
+                }
+            }
+        }
+    }
+    return -1;  // no path
+}
 ```
 
 **A* with path reconstruction**
-```python
-import heapq
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
-def a_star_path(grid: list, start: tuple, end: tuple) -> list:
-    rows, cols = len(grid), len(grid[0])
+public List<(int, int)> AStarPath(int[][] grid, (int, int) start, (int, int) end)
+{
+    int rows = grid.Length, cols = grid[0].Length;
 
-    def heuristic(r, c):
-        return abs(r - end[0]) + abs(c - end[1])
+    int Heuristic(int r, int c) => Math.Abs(r - end.Item1) + Math.Abs(c - end.Item2);
 
-    dist = [[float('inf')] * cols for _ in range(rows)]
-    dist[start[0]][start[1]] = 0
-    prev = {}
-    heap = [(heuristic(*start), 0, start[0], start[1])]
+    var dist = new Dictionary<(int, int), int>();
+    var prev = new Dictionary<(int, int), (int, int)>();
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            dist[(r, c)] = int.MaxValue;
+    dist[start] = 0;
 
-    while heap:
-        f, g, r, c = heapq.heappop(heap)
-        if (r, c) == end:
-            break
-        if g > dist[r][c]:
-            continue
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] != -1:
-                new_g = g + grid[nr][nc]
-                if new_g < dist[nr][nc]:
-                    dist[nr][nc] = new_g
-                    prev[(nr, nc)] = (r, c)
-                    heapq.heappush(heap, (new_g + heuristic(nr, nc), new_g, nr, nc))
+    var heap = new PriorityQueue<(int r, int c, int g), int>();
+    heap.Enqueue((start.Item1, start.Item2, 0), Heuristic(start.Item1, start.Item2));
 
-    path, node = [], end
-    while node in prev:
-        path.append(node)
-        node = prev[node]
-    path.append(start)
-    return path[::-1]
+    while (heap.Count > 0)
+    {
+        var (r, c, g) = heap.Dequeue();
+        if ((r, c) == end)
+            break;
+        if (g > dist[(r, c)])
+            continue;
+
+        int[][] directions = new int[][] { new int[] { -1, 0 }, new int[] { 1, 0 },
+                                            new int[] { 0, -1 }, new int[] { 0, 1 } };
+        foreach (var dir in directions)
+        {
+            int nr = r + dir[0], nc = c + dir[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] != -1)
+            {
+                int newG = g + grid[nr][nc];
+                if (newG < dist[(nr, nc)])
+                {
+                    dist[(nr, nc)] = newG;
+                    prev[(nr, nc)] = (r, c);
+                    int newF = newG + Heuristic(nr, nc);
+                    heap.Enqueue((nr, nc, newG), newF);
+                }
+            }
+        }
+    }
+
+    var path = new List<(int, int)>();
+    var node = end;
+    while (prev.ContainsKey(node))
+    {
+        path.Add(node);
+        node = prev[node];
+    }
+    path.Add(start);
+    path.Reverse();
+    return path;
+}
 ```
 
 **Comparing heuristics — effect on nodes expanded**
-```python
-def dijkstra_count(grid, start, end):
-    """Count nodes expanded — baseline with h=0."""
-    # identical to a_star but heuristic always returns 0
-    ...
+```csharp
+public int DijkstraCount(int[][] grid, (int, int) start, (int, int) end)
+{
+    // Count nodes expanded — baseline with h=0 (heuristic always 0)
+    // Identical to A* but treated as uniform cost search
+    // Returns node expansion count
+    return 0;  // implementation similar to A* with Heuristic() = 0
+}
 
-def a_star_manhattan_count(grid, start, end):
-    """Count nodes expanded — Manhattan heuristic."""
-    # typically expands far fewer nodes on open grids
-    ...
+public int AStarManhattanCount(int[][] grid, (int, int) start, (int, int) end)
+{
+    // Count nodes expanded — Manhattan heuristic
+    // Typically expands far fewer nodes on open grids
+    return 0;  // implementation calls A* and counts Dequeue() calls
+}
 
-# On a 100x100 open grid, A* with Manhattan typically expands
-# ~10x fewer nodes than Dijkstra for a corner-to-corner query.
+// On a 100x100 open grid, A* with Manhattan typically expands
+// ~10x fewer nodes than Dijkstra for a corner-to-corner query.
 ```
 
 ---

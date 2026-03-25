@@ -18,62 +18,77 @@ You take a long URL, generate a short unique key (usually 6–8 alphanumeric cha
 
 ## The Code
 
-```python
-# Key generation: base62 encoding of an auto-increment ID
-import string
-import random
+```csharp
+// Key generation: base62 encoding of an auto-increment ID
+using System;
+using System.Linq;
 
-BASE62 = string.ascii_letters + string.digits  # 62 chars
+public class Base62Converter
+{
+    private const string BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-def encode_base62(num: int) -> str:
-    """Convert integer ID to short alphanumeric key."""
-    if num == 0:
-        return BASE62[0]
-    result = []
-    while num:
-        result.append(BASE62[num % 62])
-        num //= 62
-    return ''.join(reversed(result))
+    public string EncodeBase62(long num)
+    {
+        if (num == 0)
+            return BASE62[0].ToString();
+        
+        var result = "";
+        while (num > 0)
+        {
+            result = BASE62[(int)(num % 62)] + result;
+            num /= 62;
+        }
+        return result;
+    }
 
-def decode_base62(s: str) -> int:
-    """Convert short key back to integer ID."""
-    result = 0
-    for char in s:
-        result = result * 62 + BASE62.index(char)
-    return result
-
-# Example
-print(encode_base62(1000000))   # → "4c92"
-print(decode_base62("4c92"))    # → 1000000
-```
-
-```python
-# Redirect logic (Flask pseudocode-style, real runnable)
-from flask import Flask, redirect, abort
-import redis
-
-app = Flask(__name__)
-cache = redis.Redis(host='localhost', port=6379, db=0)
-
-URL_DB = {
-    "4c92": "https://example.com/very/long/url/here"
+    public long DecodeBase62(string s)
+    {
+        long result = 0;
+        foreach (var ch in s)
+        {
+            result = result * 62 + BASE62.IndexOf(ch);
+        }
+        return result;
+    }
 }
 
-@app.route("/<short_key>")
-def redirect_url(short_key: str):
-    # Check cache first
-    cached = cache.get(short_key)
-    if cached:
-        return redirect(cached.decode(), code=302)
+// Example
+var converter = new Base62Converter();
+Console.WriteLine(converter.EncodeBase62(1000000));   // → 4c92
+Console.WriteLine(converter.DecodeBase62("4c92"));    // → 1000000
+```
 
-    # Fall back to DB
-    long_url = URL_DB.get(short_key)
-    if not long_url:
-        abort(404)
+```csharp
+// Redirect logic (ASP.NET Core pseudocode-style, real runnable)
+using Microsoft.AspNetCore.Builder;
+using StackExchange.Redis;
 
-    # Populate cache, TTL 24h
-    cache.setex(short_key, 86400, long_url)
-    return redirect(long_url, code=302)
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+var cache = ConnectionMultiplexer.Connect("localhost:6379").GetDatabase();
+
+var urlDb = new Dictionary<string, string>
+{
+    { "4c92", "https://example.com/very/long/url/here" }
+};
+
+app.MapGet("/{shortKey}", async (string shortKey) =>
+{
+    // Check cache first
+    var cached = await cache.StringGetAsync(shortKey);
+    if (cached.HasValue)
+        return Results.Redirect(cached.ToString(), permanent: false);
+
+    // Fall back to DB
+    if (!urlDb.TryGetValue(shortKey, out var longUrl))
+        return Results.NotFound();
+
+    // Populate cache, TTL 24h
+    await cache.StringSetAsync(shortKey, longUrl, TimeSpan.FromHours(24));
+    return Results.Redirect(longUrl, permanent: false);
+});
+
+app.Run("http://0.0.0.0:8080");
 ```
 
 ```sql

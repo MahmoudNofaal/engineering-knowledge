@@ -15,88 +15,129 @@ Every cache is a trade-off between speed and freshness. You're betting that the 
 ---
 
 ## The Code
-```python
-# ── Cache-aside (lazy loading) — the most common pattern ─────────────────
-# App checks cache first. On miss, loads from DB and populates cache.
-# Cache never has data it wasn't asked for — no wasted memory.
+```csharp
+// ── Cache-aside (lazy loading) — the most common pattern ──────────────────────────────────────────────────────────────
+// App checks cache first. On miss, loads from DB and populates cache.
+// Cache never has data it wasn't asked for — no wasted memory.
 
-import redis
-import json
-import hashlib
+using System;
+using System.Collections.Generic;
 
-r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+public class CacheAsidePattern
+{
+    private readonly Dictionary<string, (object data, DateTime expiry)> cache = new();
 
-def get_user(user_id: str) -> dict:
-    cache_key = f"user:{user_id}"
-    TTL_SECONDS = 300   # 5 minutes
+    public Dictionary<string, object> GetUser(string userId)
+    {
+        string cacheKey = $"user:{userId}";
+        const int TTL_SECONDS = 300;   // 5 minutes
 
-    cached = r.get(cache_key)
-    if cached:
-        return json.loads(cached)   # cache hit
+        // Check cache
+        if (cache.TryGetValue(cacheKey, out var cached))
+        {
+            if (DateTime.UtcNow < cached.expiry)
+                return (Dictionary<string, object>)cached.data;  // cache hit
+            cache.Remove(cacheKey);  // expired
+        }
 
-    # cache miss — fetch from origin
-    user = db_fetch_user(user_id)   # slow DB call
-    r.setex(cache_key, TTL_SECONDS, json.dumps(user))
-    return user
+        // Cache miss — fetch from origin
+        var user = DbFetchUser(userId);   // slow DB call
+        cache[cacheKey] = (user, DateTime.UtcNow.AddSeconds(TTL_SECONDS));
+        return user;
+    }
 
-def db_fetch_user(user_id: str) -> dict:
-    # Simulated DB call
-    return {"id": user_id, "name": "Alice", "plan": "pro"}
-```
-```python
-# ── Write-through — cache is updated on every write ──────────────────────
-# Cache is always warm. Reads are always fast. Writes are slightly slower.
-# Use when read latency matters more than write latency.
-
-def update_user(user_id: str, data: dict) -> None:
-    db_update_user(user_id, data)              # write to DB first
-    cache_key = f"user:{user_id}"
-    r.setex(cache_key, 300, json.dumps(data))  # then update cache
-
-def db_update_user(user_id: str, data: dict) -> None:
-    pass  # DB update logic
-```
-```python
-# ── Cache stampede prevention (probabilistic early expiration) ────────────
-# Problem: cache key expires, 10K concurrent requests all hit the DB at once.
-# Solution: stagger expiry by jittering TTL so they don't all expire together.
-
-import random
-
-def set_with_jitter(key: str, value: str, base_ttl: int) -> None:
-    jitter = random.randint(0, base_ttl // 10)   # ±10% jitter
-    r.setex(key, base_ttl + jitter, value)
-
-# Alternative: mutex lock — only one request rebuilds the cache.
-# Everyone else either waits or gets stale data during rebuild.
-import threading
-_rebuild_locks: dict[str, threading.Lock] = {}
-
-def get_with_mutex(key: str, rebuild_fn) -> str:
-    cached = r.get(key)
-    if cached:
-        return cached
-
-    lock = _rebuild_locks.setdefault(key, threading.Lock())
-    with lock:
-        cached = r.get(key)      # double-check after acquiring lock
-        if cached:
-            return cached
-        value = rebuild_fn()
-        r.setex(key, 300, value)
-        return value
-```
-```python
-# ── Eviction policies — what gets removed when cache is full ──────────────
-
-eviction_policies = {
-    "LRU":    "Evict least recently used. Best general-purpose default.",
-    "LFU":    "Evict least frequently used. Better for skewed access patterns.",
-    "TTL":    "Evict expired keys. Explicit freshness control.",
-    "RANDOM": "Evict random key. Simple, surprisingly effective under uniform access.",
-    "NOEVICTION": "Reject writes when full. Use only for session stores where you control size.",
+    private Dictionary<string, object> DbFetchUser(string userId)
+    {
+        // Simulated DB call
+        return new Dictionary<string, object>
+        {
+            { "id", userId },
+            { "name", "Alice" },
+            { "plan", "pro" }
+        };
+    }
 }
-# Set in redis.conf: maxmemory-policy allkeys-lru
+```
+```csharp
+// ── Write-through — cache is updated on every write ───────────────────────────────────────────────────────────────
+// Cache is always warm. Reads are always fast. Writes are slightly slower.
+// Use when read latency matters more than write latency.
+
+public void UpdateUser(string userId, Dictionary<string, object> data)
+{
+    DbUpdateUser(userId, data);             // write to DB first
+    string cacheKey = $"user:{userId}";
+    cache[cacheKey] = (data, DateTime.UtcNow.AddSeconds(300));  // then update cache
+}
+
+private void DbUpdateUser(string userId, Dictionary<string, object> data)
+{
+    // DB update logic
+}
+```
+```csharp
+// ── Cache stampede prevention (probabilistic early expiration) ────────────────────────────────────────────────────────────
+// Problem: cache key expires, 10K concurrent requests all hit the DB at once.
+// Solution: stagger expiry by jittering TTL so they don't all expire together.
+
+using System;
+using System.Threading;
+
+public void SetWithJitter(string key, object value, int baseTtl)
+{
+    var random = new Random();
+    int jitter = random.Next(0, baseTtl / 10);   // ±10% jitter
+    int ttl = baseTtl + jitter;
+    cache[key] = (value, DateTime.UtcNow.AddSeconds(ttl));
+}
+
+// Alternative: mutex lock — only one request rebuilds the cache.
+// Everyone else either waits or gets stale data during rebuild.
+private readonly Dictionary<string, object> rebuildLocks = new();
+
+public object GetWithMutex(string key, Func<object> rebuildFn)
+{
+    // Check cache first
+    if (cache.TryGetValue(key, out var cached))
+    {
+        if (DateTime.UtcNow < cached.expiry)
+            return cached.data;   // cache hit
+        cache.Remove(key);
+    }
+
+    // Get or create lock for this key
+    lock (rebuildLocks)
+    {
+        if (!rebuildLocks.ContainsKey(key))
+            rebuildLocks[key] = new object();
+    }
+
+    var lockObj = rebuildLocks[key];
+    lock (lockObj)
+    {
+        // Double-check after acquiring lock
+        if (cache.TryGetValue(key, out cached))
+            if (DateTime.UtcNow < cached.expiry)
+                return cached.data;
+
+        object value = rebuildFn();
+        cache[key] = (value, DateTime.UtcNow.AddSeconds(300));
+        return value;
+    }
+}
+```
+```csharp
+// ── Eviction policies — what gets removed when cache is full ────────────────────────────────────────────────────────────────
+
+var evictionPolicies = new Dictionary<string, string>
+{
+    { "LRU", "Evict least recently used. Best general-purpose default." },
+    { "LFU", "Evict least frequently used. Better for skewed access patterns." },
+    { "TTL", "Evict expired keys. Explicit freshness control." },
+    { "RANDOM", "Evict random key. Simple, surprisingly effective under uniform access." },
+    { "NOEVICTION", "Reject writes when full. Use only for session stores where you control size." },
+};
+// Configure in cache settings: use LRU by default for most scenarios
 ```
 
 ---

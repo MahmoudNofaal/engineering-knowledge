@@ -18,86 +18,138 @@ Two variants: **fixed-size window** (both pointers move in lockstep, window size
 ## The Code
 
 **Fixed window — maximum sum of k consecutive elements**
-```python
-def max_sum_k(items: list, k: int) -> int:
-    window = sum(items[:k])
-    best = window
-    for i in range(k, len(items)):
-        window += items[i] - items[i - k]    # add right, drop left
-        best = max(best, window)
-    return best
+```csharp
+public static int MaxSumK(List<int> items, int k)
+{
+    int window = items.Skip(0).Take(k).Sum();
+    int best = window;
+    for (int i = k; i < items.Count; i++)
+    {
+        window += items[i] - items[i - k];    // add right, drop left
+        best = Math.Max(best, window);
+    }
+    return best;
+}
 ```
 
 **Variable window — longest substring without repeating characters**
-```python
-def length_of_longest_substring(s: str) -> int:
-    char_index = {}
-    best = left = 0
-    for right, ch in enumerate(s):
-        if ch in char_index and char_index[ch] >= left:
-            left = char_index[ch] + 1    # jump left past the duplicate
-        char_index[ch] = right
-        best = max(best, right - left + 1)
-    return best
+```csharp
+public static int LengthOfLongestSubstring(string s)
+{
+    var charIndex = new Dictionary<char, int>();
+    int best = 0, left = 0;
+    
+    for (int right = 0; right < s.Length; right++)
+    {
+        char ch = s[right];
+        if (charIndex.ContainsKey(ch) && charIndex[ch] >= left)
+            left = charIndex[ch] + 1;    // jump left past the duplicate
+        
+        charIndex[ch] = right;
+        best = Math.Max(best, right - left + 1);
+    }
+    return best;
+}
 ```
 
 **Variable window — minimum window substring containing all target chars**
-```python
-from collections import Counter
-
-def min_window(s: str, t: str) -> str:
-    need = Counter(t)
-    missing = len(t)       # total characters still needed in window
-    best = ""
-    left = 0
-    for right, ch in enumerate(s):
-        if need[ch] > 0:
-            missing -= 1   # this character was needed and is now covered
-        need[ch] -= 1
-        if missing == 0:   # window satisfies the constraint
-            # shrink from left while constraint still holds
-            while need[s[left]] < 0:
-                need[s[left]] += 1
-                left += 1
-            window = s[left:right + 1]
-            if not best or len(window) < len(best):
-                best = window
-            # break the constraint to force expansion
-            need[s[left]] += 1
-            missing += 1
-            left += 1
-    return best
+```csharp
+public static string MinWindow(string s, string t)
+{
+    var need = new Dictionary<char, int>();
+    foreach (char ch in t)
+    {
+        if (need.ContainsKey(ch))
+            need[ch]++;
+        else
+            need[ch] = 1;
+    }
+    
+    int missing = t.Length;  // total characters still needed in window
+    string best = "";
+    int left = 0;
+    
+    for (int right = 0; right < s.Length; right++)
+    {
+        char ch = s[right];
+        if (need.ContainsKey(ch) && need[ch] > 0)
+            missing--;   // this character was needed and is now covered
+        if (need.ContainsKey(ch))
+            need[ch]--;
+        
+        if (missing == 0)   // window satisfies the constraint
+        {
+            // shrink from left while constraint still holds
+            while (need[s[left]] < 0)
+            {
+                need[s[left]]++;
+                left++;
+            }
+            string window = s.Substring(left, right - left + 1);
+            if (best.Length == 0 || window.Length < best.Length)
+                best = window;
+            
+            // break the constraint to force expansion
+            need[s[left]]++;
+            missing++;
+            left++;
+        }
+    }
+    return best;
+}
 ```
 
 **Variable window — longest subarray with sum ≤ k (non-negative values)**
-```python
-def longest_subarray_sum(items: list, k: int) -> int:
-    left = window_sum = best = 0
-    for right, val in enumerate(items):
-        window_sum += val
-        while window_sum > k:
-            window_sum -= items[left]
-            left += 1
-        best = max(best, right - left + 1)
-    return best
+```csharp
+public static int LongestSubarraySum(List<int> items, int k)
+{
+    int left = 0, windowSum = 0, best = 0;
+    
+    for (int right = 0; right < items.Count; right++)
+    {
+        windowSum += items[right];
+        while (windowSum > k)
+        {
+            windowSum -= items[left];
+            left++;
+        }
+        best = Math.Max(best, right - left + 1);
+    }
+    return best;
+}
 ```
 
 **Counting subarrays with exactly k distinct values — sliding window on counts**
-```python
-def subarrays_with_k_distinct(nums: list, k: int) -> int:
-    # exactly k = at most k - at most (k-1)
-    def at_most(k: int) -> int:
-        count = {}
-        left = result = 0
-        for right, val in enumerate(nums):
-            count[val] = count.get(val, 0) + 1
-            while len(count) > k:
-                count[nums[left]] -= 1
-                if count[nums[left]] == 0:
-                    del count[nums[left]]
-                left += 1
-            result += right - left + 1    # all subarrays ending at right
-        return result
+```csharp
+public static int SubarraysWithKDistinct(int[] nums, int k)
+{
+    // exactly k = at most k - at most (k-1)
+    int AtMost(int maxDistinct)
+    {
+        var count = new Dictionary<int, int>();
+        int left = 0, result = 0;
+        
+        for (int right = 0; right < nums.Length; right++)
+        {
+            if (!count.ContainsKey(nums[right]))
+                count[nums[right]] = 0;
+            count[nums[right]]++;
+            
+            while (count.Count > maxDistinct)
+            {
+                count[nums[left]]--;
+                if (count[nums[left]] == 0)
+                    count.Remove(nums[left]);
+                left++;
+            }
+            result += right - left + 1;    // all subarrays ending at right
+        }
+        return result;
+    }
+    
+    return AtMost(k) - AtMost(k - 1);
+}
+```
     return at_most(k) - at_most(k - 1)
 ```
 

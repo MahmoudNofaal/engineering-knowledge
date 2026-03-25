@@ -20,68 +20,91 @@ The key insight for radix sort: if you sort by the least significant digit first
 ## The Code
 
 **Counting sort — integers in range [0, k]**
-```python
-def counting_sort(items: list, k: int) -> list:
-    count = [0] * (k + 1)
-    for val in items:
-        count[val] += 1
+```csharp
+public static List<int> CountingSort(List<int> items, int k)
+{
+    var count = new int[k + 1];
+    foreach (var val in items)
+        count[val]++;
 
-    # prefix sum: count[i] = number of elements ≤ i
-    for i in range(1, k + 1):
-        count[i] += count[i - 1]
+    // prefix sum: count[i] = number of elements ≤ i
+    for (int i = 1; i <= k; i++)
+        count[i] += count[i - 1];
 
-    output = [0] * len(items)
-    for val in reversed(items):           # reversed preserves stability
-        output[count[val] - 1] = val
-        count[val] -= 1
-    return output
+    var output = new int[items.Count];
+    for (int j = items.Count - 1; j >= 0; j--)   // reversed preserves stability
+    {
+        int val = items[j];
+        output[count[val] - 1] = val;
+        count[val]--;
+    }
+    return output.ToList();
+}
 ```
 
 **Counting sort used as a subroutine in radix sort**
-```python
-def counting_sort_by_digit(items: list, exp: int) -> list:
-    n = len(items)
-    count = [0] * 10
-    output = [0] * n
+```csharp
+public static List<int> CountingSortByDigit(List<int> items, int exp)
+{
+    int n = items.Count;
+    var count = new int[10];
+    var output = new int[n];
 
-    for val in items:
-        digit = (val // exp) % 10
-        count[digit] += 1
+    foreach (var val in items)
+    {
+        int digit = (val / exp) % 10;
+        count[digit]++;
+    }
 
-    for i in range(1, 10):
-        count[i] += count[i - 1]          # prefix sum
+    for (int i = 1; i < 10; i++)
+        count[i] += count[i - 1];          // prefix sum
 
-    for val in reversed(items):           # reversed for stability
-        digit = (val // exp) % 10
-        output[count[digit] - 1] = val
-        count[digit] -= 1
-    return output
+    for (int j = n - 1; j >= 0; j--)   // reversed for stability
+    {
+        int val = items[j];
+        int digit = (val / exp) % 10;
+        output[count[digit] - 1] = val;
+        count[digit]--;
+    }
+    return output.ToList();
+}
 ```
 
 **LSD Radix sort**
-```python
-def radix_sort(items: list) -> list:
-    if not items:
-        return items
-    max_val = max(items)
-    exp = 1
-    while max_val // exp > 0:
-        items = counting_sort_by_digit(items, exp)
-        exp *= 10                         # move to next digit
-    return items
+```csharp
+public static List<int> RadixSort(List<int> items)
+{
+    if (items.Count == 0)
+        return items;
+    int maxVal = items.Max();
+    int exp = 1;
+    while (maxVal / exp > 0)
+    {
+        items = CountingSortByDigit(items, exp);
+        exp *= 10;                         // move to next digit
+    }
+    return items;
+}
 
-# Usage
-arr = [170, 45, 75, 90, 802, 24, 2, 66]
-print(radix_sort(arr))  # [2, 24, 45, 66, 75, 90, 170, 802]
+// Usage
+var arr = new List<int> { 170, 45, 75, 90, 802, 24, 2, 66 };
+Console.WriteLine(string.Join(", ", RadixSort(arr)));  // [2, 24, 45, 66, 75, 90, 170, 802]
 ```
 
 **Counting sort for characters — sort a string**
-```python
-def sort_string(s: str) -> str:
-    count = [0] * 26
-    for ch in s:
-        count[ord(ch) - ord('a')] += 1
-    return ''.join(chr(ord('a') + i) * count[i] for i in range(26))
+```csharp
+public static string SortString(string s)
+{
+    var count = new int[26];
+    foreach (var ch in s)
+        count[ch - 'a']++;
+    
+    var result = new StringBuilder();
+    for (int i = 0; i < 26; i++)
+        for (int j = 0; j < count[i]; j++)
+            result.Append((char)('a' + i));
+    return result.ToString();
+}
 ```
 
 ---

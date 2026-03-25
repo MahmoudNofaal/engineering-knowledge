@@ -19,135 +19,163 @@ The pipeline is a sequence of stages. Each stage receives a stream of documents,
 ## The Code
 
 **Pipeline structure and stage order**
-```python
-from pymongo import MongoClient
+```csharp
+using MongoDB.Driver;
 
-db  = MongoClient()["shopdb"]
-col = db["orders"]
+var client = new MongoClient();
+var db = client.GetDatabase("shopdb");
+var col = db.GetCollection<BsonDocument>("orders");
 
-pipeline = [
-    {"$match": ...},      # 1. Filter first — uses indexes
-    {"$project": ...},    # 2. Reduce document size early
-    {"$group": ...},      # 3. Aggregate reduced documents
-    {"$sort": ...},       # 4. Sort aggregated results
-    {"$limit": ...},      # 5. Cap output
-]
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument()),  // 1. Filter first — uses indexes
+    new BsonDocument("$project", new BsonDocument()),  // 2. Reduce document size early
+    new BsonDocument("$group", new BsonDocument()),  // 3. Aggregate reduced documents
+    new BsonDocument("$sort", new BsonDocument()),  // 4. Sort aggregated results
+    new BsonDocument("$limit", 10),  // 5. Cap output
+};
 
-results = list(col.aggregate(pipeline))
+var results = col.Aggregate<BsonDocument>(pipeline).ToList();
 ```
 
 **`$match` — filter documents (always first)**
-```python
-from datetime import datetime, timedelta
+```csharp
+using System;
+using MongoDB.Driver;
 
-pipeline = [
-    {"$match": {
-        "status":     "completed",
-        "created_at": {"$gte": datetime.utcnow() - timedelta(days=30)},
-        "total":      {"$gt": 0}
-    }}
-]
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument
+    {
+        { "status", "completed" },
+        { "created_at", new BsonDocument("$gte", DateTime.UtcNow.AddDays(-30)) },
+        { "total", new BsonDocument("$gt", 0) }
+    })
+};
 ```
 
 **`$group` — aggregate and compute**
-```python
-pipeline = [
-    {"$match": {"status": "completed"}},
-    {"$group": {
-        "_id":           "$customer_id",    # group key — None for grand total
-        "order_count":   {"$sum": 1},
-        "total_spent":   {"$sum": "$total"},
-        "avg_order":     {"$avg": "$total"},
-        "first_order":   {"$min": "$created_at"},
-        "last_order":    {"$max": "$created_at"},
-        "all_items":     {"$push": "$items"},       # array of all items
-        "unique_skus":   {"$addToSet": "$sku"},     # deduplicated array
-    }}
-]
+```csharp
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument("status", "completed")),
+    new BsonDocument("$group", new BsonDocument
+    {
+        { "_id", "$customer_id" },    // group key — null for grand total
+        { "order_count", new BsonDocument("$sum", 1) },
+        { "total_spent", new BsonDocument("$sum", "$total") },
+        { "avg_order", new BsonDocument("$avg", "$total") },
+        { "first_order", new BsonDocument("$min", "$created_at") },
+        { "last_order", new BsonDocument("$max", "$created_at") },
+        { "all_items", new BsonDocument("$push", "$items") },       // array of all items
+        { "unique_skus", new BsonDocument("$addToSet", "$sku") },   // deduplicated array
+    })
+};
 ```
 
 **`$project` — reshape and compute fields**
-```python
-pipeline = [
-    {"$project": {
-        "name":       1,                            # include
-        "email":      1,
-        "password":   0,                            # exclude sensitive field
-        # Computed fields
-        "full_name":  {"$concat": ["$first_name", " ", "$last_name"]},
-        "year":       {"$year": "$created_at"},
-        "discounted": {"$multiply": ["$price", 0.9]},
-        "is_vip":     {"$gte": ["$total_spent", 1000]},  # boolean expression
-    }}
-]
+```csharp
+var pipeline = new[]
+{
+    new BsonDocument("$project", new BsonDocument
+    {
+        { "name", 1 },                            // include
+        { "email", 1 },
+        { "password", 0 },                        // exclude sensitive field
+        // Computed fields
+        { "full_name", new BsonDocument("$concat", new BsonArray { "$first_name", " ", "$last_name" }) },
+        { "year", new BsonDocument("$year", "$created_at") },
+        { "discounted", new BsonDocument("$multiply", new BsonArray { "$price", 0.9 }) },
+        { "is_vip", new BsonDocument("$gte", new BsonArray { "$total_spent", 1000 }) },  // boolean expression
+    })
+};
 ```
 
 **`$addFields` — add fields without dropping others**
-```python
-# $project replaces the document shape; $addFields just adds to it
-pipeline = [
-    {"$addFields": {
-        "tax":         {"$multiply": ["$total", 0.14]},
-        "grand_total": {"$multiply": ["$total", 1.14]},
-    }}
-]
+```csharp
+// $project replaces the document shape; $addFields just adds to it
+var pipeline = new[]
+{
+    new BsonDocument("$addFields", new BsonDocument
+    {
+        { "tax", new BsonDocument("$multiply", new BsonArray { "$total", 0.14 }) },
+        { "grand_total", new BsonDocument("$multiply", new BsonArray { "$total", 1.14 }) },
+    })
+};
 ```
 
 **`$unwind` — flatten arrays into separate documents**
-```python
-# Document: {order_id: 1, items: [{sku: "A"}, {sku: "B"}]}
-# After $unwind: two documents, one per item
+```csharp
+// Document: {order_id: 1, items: [{sku: "A"}, {sku: "B"}]}
+// After $unwind: two documents, one per item
 
-pipeline = [
-    {"$unwind": "$items"},
-    {"$group": {
-        "_id":   "$items.sku",
-        "count": {"$sum": 1}
-    }}
-]
+var pipeline = new[]
+{
+    new BsonDocument("$unwind", "$items"),
+    new BsonDocument("$group", new BsonDocument
+    {
+        { "_id", "$items.sku" },
+        { "count", new BsonDocument("$sum", 1) }
+    })
+};
 
-# Preserve documents with empty or missing arrays
-pipeline = [
-    {"$unwind": {
-        "path":                       "$items",
-        "preserveNullAndEmptyArrays": True     # keeps docs where items is [] or missing
-    }}
-]
+// Preserve documents with empty or missing arrays
+var pipelinePreserve = new[]
+{
+    new BsonDocument("$unwind", new BsonDocument
+    {
+        { "path", "$items" },
+        { "preserveNullAndEmptyArrays", true }  // keeps docs where items is [] or missing
+    })
+};
 ```
 
 **`$lookup` — join another collection**
-```python
-# Left outer join: attach product details to each order item
-pipeline = [
-    {"$unwind": "$items"},
-    {"$lookup": {
-        "from":         "products",         # collection to join
-        "localField":   "items.product_id", # field in current doc
-        "foreignField": "_id",              # field in joined collection
-        "as":           "product_detail"    # output array field name
-    }},
-    # $lookup always produces an array — unwrap it
-    {"$unwind": "$product_detail"},
-    {"$project": {
-        "order_id":    1,
-        "qty":         "$items.qty",
-        "product":     "$product_detail.name",
-        "line_total":  {"$multiply": ["$items.qty", "$product_detail.price"]}
-    }}
-]
+```csharp
+// Left outer join: attach product details to each order item
+var pipeline = new[]
+{
+    new BsonDocument("$unwind", "$items"),
+    new BsonDocument("$lookup", new BsonDocument
+    {
+        { "from", "products" },         // collection to join
+        { "localField", "items.product_id" },  // field in current doc
+        { "foreignField", "_id" },              // field in joined collection
+        { "as", "product_detail" }      // output array field name
+    }),
+    // $lookup always produces an array — unwrap it
+    new BsonDocument("$unwind", "$product_detail"),
+    new BsonDocument("$project", new BsonDocument
+    {
+        { "order_id", 1 },
+        { "qty", "$items.qty" },
+        { "product", "$product_detail.name" },
+        { "line_total", new BsonDocument("$multiply", new BsonArray { "$items.qty", "$product_detail.price" }) }
+    })
+};
 
-# Pipeline $lookup — more powerful, lets you filter joined docs
-pipeline = [
-    {"$lookup": {
-        "from": "products",
-        "let":  {"pid": "$product_id", "min_stock": 10},
-        "pipeline": [
-            {"$match": {"$expr": {
-                "$and": [
-                    {"$eq":  ["$$pid", "$_id"]},
-                    {"$gte": ["$stock", "$$min_stock"]}
-                ]
-            }}}
+// Pipeline $lookup — more powerful, lets you filter joined docs
+var pipelineLookup = new[]
+{
+    new BsonDocument("$lookup", new BsonDocument
+    {
+        { "from", "products" },
+        { "let", new BsonDocument { { "pid", "$product_id" }, { "min_stock", 10 } } },
+        { "pipeline", new BsonArray
+        {
+            new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument
+            {
+                { "$and", new BsonArray
+                {
+                    new BsonDocument("$eq", new BsonArray { "$$pid", "$_id" }),
+                    new BsonDocument("$gte", new BsonArray { "$stock", "$$min_stock" })
+                }}
+            }))
+        }},
+        { "as", "available_product" }
+    })
+};
+```
         ],
         "as": "available_product"
     }}
@@ -155,76 +183,102 @@ pipeline = [
 ```
 
 **`$facet` — multiple sub-pipelines in one pass**
-```python
-# Run several aggregations over the same input simultaneously
-pipeline = [
-    {"$match": {"status": "completed"}},
-    {"$facet": {
-        "by_status": [
-            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
-        ],
-        "by_month": [
-            {"$group": {
-                "_id":   {"$month": "$created_at"},
-                "total": {"$sum": "$amount"}
-            }},
-            {"$sort": {"_id": 1}}
-        ],
-        "summary": [
-            {"$group": {
-                "_id":       None,
-                "total_rev": {"$sum": "$amount"},
-                "avg_order": {"$avg": "$amount"},
-            }}
-        ]
-    }}
-]
-# Returns one document with three arrays — one scan, three results
+```csharp
+// Run several aggregations over the same input simultaneously
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument("status", "completed")),
+    new BsonDocument("$facet", new BsonDocument
+    {
+        { "by_status", new BsonArray
+        {
+            new BsonDocument("$group", new BsonDocument
+            {
+                { "_id", "$status" },
+                { "count", new BsonDocument("$sum", 1) }
+            })
+        }},
+        { "by_month", new BsonArray
+        {
+            new BsonDocument("$group", new BsonDocument
+            {
+                { "_id", new BsonDocument("$month", "$created_at") },
+                { "total", new BsonDocument("$sum", "$amount") }
+            }),
+            new BsonDocument("$sort", new BsonDocument("_id", 1))
+        }},
+        { "summary", new BsonArray
+        {
+            new BsonDocument("$group", new BsonDocument
+            {
+                { "_id", BsonNull.Value },
+                { "total_rev", new BsonDocument("$sum", "$amount") },
+                { "avg_order", new BsonDocument("$avg", "$amount") },
+            })
+        }}
+    })
+};
+// Returns one document with three arrays — one scan, three results
 ```
 
 **`$bucket` — range-based grouping**
-```python
-pipeline = [
-    {"$bucket": {
-        "groupBy":    "$price",
-        "boundaries": [0, 100, 500, 1000, 5000],   # defines bucket edges
-        "default":    "Other",                      # catches values outside boundaries
-        "output": {
-            "count": {"$sum": 1},
-            "avg":   {"$avg": "$price"}
-        }
-    }}
-]
-# Produces: {_id: 0, count: N}, {_id: 100, count: N}, ...
+```csharp
+var pipeline = new[]
+{
+    new BsonDocument("$bucket", new BsonDocument
+    {
+        { "groupBy", "$price" },
+        { "boundaries", new BsonArray { 0, 100, 500, 1000, 5000 } },  // defines bucket edges
+        { "default", "Other" },                      // catches values outside boundaries
+        { "output", new BsonDocument
+        {
+            { "count", new BsonDocument("$sum", 1) },
+            { "avg", new BsonDocument("$avg", "$price") }
+        }}
+    })
+};
+// Produces: {_id: 0, count: N}, {_id: 100, count: N}, ...
 ```
 
 **`$sort` + `$limit` — top N pattern**
-```python
-# Always pair $sort with $limit — sorting without limiting is expensive
-pipeline = [
-    {"$match":  {"status": "completed"}},
-    {"$group":  {"_id": "$customer_id", "total": {"$sum": "$amount"}}},
-    {"$sort":   {"total": -1}},
-    {"$limit":  10},
-    {"$project": {"customer": "$_id", "total": 1, "_id": 0}}
-]
+```csharp
+// Always pair $sort with $limit — sorting without limiting is expensive
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument("status", "completed")),
+    new BsonDocument("$group", new BsonDocument
+    {
+        { "_id", "$customer_id" },
+        { "total", new BsonDocument("$sum", "$amount") }
+    }),
+    new BsonDocument("$sort", new BsonDocument("total", -1)),
+    new BsonDocument("$limit", 10),
+    new BsonDocument("$project", new BsonDocument
+    {
+        { "customer", "$_id" },
+        { "total", 1 },
+        { "_id", 0 }
+    })
+};
 ```
 
 **`$expr` — use aggregation expressions inside `$match`**
-```python
-# Compare two fields in the same document
-pipeline = [
-    {"$match": {
-        "$expr": {"$gt": ["$actual_delivery", "$promised_delivery"]}
-    }}
-]
+```csharp
+// Compare two fields in the same document
+var pipeline = new[]
+{
+    new BsonDocument("$match", new BsonDocument(
+        "$expr", new BsonDocument("$gt", new BsonArray { "$actual_delivery", "$promised_delivery" })
+    ))
+};
 ```
 
 **Explain a pipeline — check if indexes are used**
-```python
-col.aggregate(pipeline, explain=True)
-# Look for IXSCAN (index used) vs COLLSCAN (full scan)
-# $match at the start of the pipeline should show IXSCAN on indexed fields
+```csharp
+var options = new AggregateOptions { Explain = true };
+var explain = col.Aggregate<BsonDocument>(pipeline, options);
+// Look for IXSCAN (index used) vs COLLSCAN (full scan) in the explain output
+// $match at the start of the pipeline should show IXSCAN on indexed fields
 ```
 
 ---

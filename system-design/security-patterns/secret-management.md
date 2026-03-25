@@ -22,46 +22,129 @@ The core problem is that code needs credentials to run, but credentials in code 
 ```csharp
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
+using System;
+using System.Threading.Tasks;
 
-public async Task<string> GetSecretAsync(string secretName)
+public class SecretsManager
 {
-    var client = new AmazonSecretsManagerClient(); // uses IAM role — no hardcoded keys
-    var request = new GetSecretValueRequest { SecretId = secretName };
-    var response = await client.GetSecretValueAsync(request);
-    return response.SecretString; // e.g. {"username":"admin","password":"s3cr3t"}
+    public async Task<string> GetSecretAsync(string secretName)
+    {
+        var client = new AmazonSecretsManagerClient();  // uses IAM role — no hardcoded keys
+        var request = new GetSecretValueRequest { SecretId = secretName };
+        
+        try
+        {
+            var response = await client.GetSecretValueAsync(request);
+            return response.SecretString;  // e.g. {"username":"admin","password":"s3cr3t"}
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error retrieving secret: {ex.Message}");
+            throw;
+        }
+    }
 }
 ```
 
 ### Loading secrets into ASP.NET Core configuration
 ```csharp
 // Program.cs — pull secrets at startup, inject via IConfiguration
+using Amazon.SecretsManager;
+using Amazon.Extensions.Configuration.SystemsManager;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add AWS Secrets Manager as a configuration source
 builder.Configuration.AddSecretsManager(configurator: options =>
 {
-    // Map secret name "prod/myapp/db" → config key "ConnectionStrings:Default"
     options.SecretFilter = entry => entry.Name.StartsWith("prod/myapp/");
-    options.KeyGenerator = (entry, key) => key.Replace("prod/myapp/", "").Replace("/", ":");
+    options.KeyGenerator = (entry, key) => key
+        .Replace("prod/myapp/", "")
+        .Replace("/", ":");
 });
+
+var app = builder.Build();
 
 // Now use it normally — secret value is never in code or config files
 var connStr = builder.Configuration.GetConnectionString("db");
+var apiKey = builder.Configuration["api_key"];
 ```
 
-### HashiCorp Vault — fetching a secret (Python)
-```python
-import hvac
+### HashiCorp Vault — fetching a secret (C#)
+```csharp
+using System;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
 
-# Vault auth via AppRole (machine identity — no human password needed)
-client = hvac.Client(url="https://vault.internal:8200")
-client.auth.approle.login(
-    role_id="my-role-id",
-    secret_id="my-secret-id"  # injected at deploy time, not hardcoded
-)
+public class VaultClient
+{
+    private readonly HttpClient _httpClient;
+    private readonly string _vaultUrl;
+    private string _token;
 
-secret = client.secrets.kv.v2.read_secret_version(
-    path="myapp/database",
-    mount_point="secret"
-)
-password = secret["data"]["data"]["password"]
+    public VaultClient(string vaultUrl)
+    {
+        _vaultUrl = vaultUrl;
+        _httpClient = new HttpClient();
+    }
+
+    public async Task LoginWithAppRoleAsync(string roleId, string secretId)
+    {
+        // Vault auth via AppRole (machine identity — no human password needed)
+        var loginRequest = new
+        {
+            role_id = roleId,
+            secret_id = secretId
+        };
+
+        var content = new StringContent(
+            JsonSerializer.Serialize(loginRequest),
+            System.Text.Encoding.UTF8,
+            "application/json"
+        );
+
+        var response = await _httpClient.PostAsync(
+            $"{_vaultUrl}/v1/auth/approle/login",
+            content
+        );
+
+        var responseJson = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<JsonElement>(responseJson);
+        _token = result.GetProperty("auth").GetProperty("client_token").GetString();
+    }
+
+    public async Task<Dictionary<string, string>> ReadSecretAsync(string path)
+    {
+        _httpClient.DefaultRequestHeaders.Clear();
+        _httpClient.DefaultRequestHeaders.Add("X-Vault-Token", _token);
+
+        var response = await _httpClient.GetAsync(
+            $"{_vaultUrl}/v1/secret/data/{path}"
+        );
+
+        var responseJson = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<JsonElement>(responseJson);
+        var data = result.GetProperty("data").GetProperty("data");
+
+        var secret = new Dictionary<string, string>();
+        foreach (var prop in data.EnumerateObject())
+        {
+            secret[prop.Name] = prop.Value.GetString();
+        }
+        return secret;
+    }
+}
+
+// Usage
+var vault = new VaultClient("https://vault.internal:8200");
+await vault.LoginWithAppRoleAsync(
+    roleId: "my-role-id",
+    secretId: "my-secret-id"  // injected at deploy time, not hardcoded
+);
+
+var secret = await vault.ReadSecretAsync("myapp/database");
+var password = secret["password"];
 ```
 
 ### Detecting leaked secrets in git (pre-commit hook)

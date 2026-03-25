@@ -15,62 +15,70 @@ Different storage and network layers differ in speed by several orders of magnit
 ---
 
 ## The Code
-```python
-# Latency reference table — memorize the orders of magnitude, not the exact nanoseconds.
-# Source: Jeff Dean's numbers, updated for modern hardware.
+```csharp
+// Latency reference table — memorize the orders of magnitude, not the exact nanoseconds.
+// Source: Jeff Dean's numbers, updated for modern hardware.
 
-latencies_ns = {
-    # ── CPU & Memory ──────────────────────────────────────────────
-    "L1 cache reference":              0.5,
-    "Branch misprediction":            5,
-    "L2 cache reference":              7,
-    "Mutex lock/unlock":               25,
-    "Main memory reference":           100,
+var latenciesNs = new Dictionary<string, long>
+{
+    // ── CPU & Memory ──────────────────────────────────────────────
+    { "L1 cache reference",              (long)0.5 },
+    { "Branch misprediction",            5 },
+    { "L2 cache reference",              7 },
+    { "Mutex lock/unlock",               25 },
+    { "Main memory reference",           100 },
 
-    # ── Storage ───────────────────────────────────────────────────
-    "SSD random read (NVMe)":          20_000,          # 20 µs
-    "Read 1 MB sequentially from SSD": 1_000_000,       # 1 ms
-    "HDD disk seek":                   10_000_000,      # 10 ms
-    "Read 1 MB sequentially from HDD": 20_000_000,      # 20 ms
+    // ── Storage ───────────────────────────────────────────────────
+    { "SSD random read (NVMe)",          20_000 },          // 20 µs
+    { "Read 1 MB sequentially from SSD", 1_000_000 },       // 1 ms
+    { "HDD disk seek",                   10_000_000 },      // 10 ms
+    { "Read 1 MB sequentially from HDD", 20_000_000 },      // 20 ms
 
-    # ── Network ───────────────────────────────────────────────────
-    "Send 1 KB over 1 Gbps network":   10_000,          # 10 µs
-    "Same datacenter round trip":       500_000,         # 0.5 ms
-    "Cross-region round trip (US–EU)": 150_000_000,     # 150 ms
+    // ── Network ───────────────────────────────────────────────────
+    { "Send 1 KB over 1 Gbps network",   10_000 },          // 10 µs
+    { "Same datacenter round trip",      500_000 },         // 0.5 ms
+    { "Cross-region round trip (US–EU)", 150_000_000 },     // 150 ms
+};
+
+Console.WriteLine($"{"Operation",-42} {"Latency",12}");
+Console.WriteLine(new string('-', 56));
+foreach (var kvp in latenciesNs)
+{
+    string label;
+    if (kvp.Value >= 1_000_000)
+        label = $"{kvp.Value / 1_000_000.0:F1} ms";
+    else if (kvp.Value >= 1_000)
+        label = $"{kvp.Value / 1_000.0:F1} µs";
+    else
+        label = $"{kvp.Value:F1} ns";
+    Console.WriteLine($"{kvp.Key,-42} {label,12}");
+}
+```
+```csharp
+// ── Practical implications in design decisions ────────────────────────────
+
+public void DesignDecision(string readSource, int readsPerSecond)
+{
+    var latenciesMs = new Dictionary<string, double>
+    {
+        { "l1_cache",       0.0000005 },
+        { "ram",            0.0001 },
+        { "ssd",            0.02 },
+        { "hdd",            10.0 },
+        { "local_network",  0.5 },
+        { "cross_region",   150.0 },
+    };
+    
+    double latency = latenciesMs[readSource];
+    double totalLatencyS = (latency * readsPerSecond) / 1000;
+    Console.WriteLine($"{readsPerSecond} reads/s from {readSource}: {totalLatencyS:F2}s of I/O per second");
 }
 
-print(f"{'Operation':<42} {'Latency':>12}")
-print("-" * 56)
-for op, ns in latencies_ns.items():
-    if ns >= 1_000_000:
-        label = f"{ns/1_000_000:.1f} ms"
-    elif ns >= 1_000:
-        label = f"{ns/1_000:.1f} µs"
-    else:
-        label = f"{ns:.1f} ns"
-    print(f"{op:<42} {label:>12}")
-```
-```python
-# ── Practical implications in design decisions ────────────────────────────
+// 10K reads/sec from HDD = this is catastrophic
+DesignDecision("hdd", 10_000);
 
-def design_decision(read_source: str, reads_per_second: int) -> None:
-    latencies_ms = {
-        "l1_cache":       0.0000005,
-        "ram":            0.0001,
-        "ssd":            0.02,
-        "hdd":            10.0,
-        "local_network":  0.5,
-        "cross_region":   150.0,
-    }
-    latency = latencies_ms[read_source]
-    total_latency_s = (latency * reads_per_second) / 1000
-    print(f"{reads_per_second} reads/s from {read_source}: {total_latency_s:.2f}s of I/O per second")
-
-# 10K reads/sec from HDD = this is catastrophic
-design_decision("hdd", 10_000)
-
-# 10K reads/sec from RAM = totally fine
-design_decision("ram", 10_000)
+// 10K reads/sec from RAM = totally fine
+DesignDecision("ram", 10_000);
 ```
 
 ---

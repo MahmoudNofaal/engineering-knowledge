@@ -18,122 +18,192 @@ The mechanical transformation: identify what state each recursive call needs (wh
 ## The Code
 
 **Factorial — tail recursion to loop**
-```python
-# Recursive — O(n) stack depth
-def factorial_rec(n: int) -> int:
-    if n <= 1:
-        return 1
-    return n * factorial_rec(n - 1)
+```csharp
+// Recursive — O(n) stack depth
+public int FactorialRec(int n)
+{
+    if (n <= 1)
+        return 1;
+    return n * FactorialRec(n - 1);
+}
 
-# Iterative — O(1) stack space
-def factorial_iter(n: int) -> int:
-    result = 1
-    for i in range(2, n + 1):
-        result *= i
-    return result
+// Iterative — O(1) stack space
+public int FactorialIter(int n)
+{
+    int result = 1;
+    for (int i = 2; i <= n; i++)
+        result *= i;
+    return result;
+}
 ```
 
 **Binary tree inorder traversal**
-```python
-# Recursive
-def inorder_rec(root) -> list:
-    if not root:
-        return []
-    return inorder_rec(root.left) + [root.val] + inorder_rec(root.right)
+```csharp
+// Recursive
+public List<int> InorderRec(TreeNode root)
+{
+    var result = new List<int>();
+    if (root == null)
+        return result;
+    result.AddRange(InorderRec(root.Left));
+    result.Add(root.Val);
+    result.AddRange(InorderRec(root.Right));
+    return result;
+}
 
-# Iterative — explicit stack simulates the call stack
-def inorder_iter(root) -> list:
-    result, stack = [], []
-    curr = root
-    while curr or stack:
-        while curr:
-            stack.append(curr)     # push: go as far left as possible
-            curr = curr.left
-        curr = stack.pop()         # pop: process node
-        result.append(curr.val)
-        curr = curr.right          # then explore right subtree
-    return result
+// Iterative — explicit stack simulates the call stack
+public List<int> InorderIter(TreeNode root)
+{
+    var result = new List<int>();
+    var stack = new Stack<TreeNode>();
+    TreeNode curr = root;
+    
+    while (curr != null || stack.Count > 0)
+    {
+        while (curr != null)
+        {
+            stack.Push(curr);  // Push: go as far left as possible
+            curr = curr.Left;
+        }
+        curr = stack.Pop();    // Pop: process node
+        result.Add(curr.Val);
+        curr = curr.Right;     // Then explore right subtree
+    }
+    return result;
+}
 ```
 
 **Binary tree preorder traversal**
-```python
-def preorder_iter(root) -> list:
-    if not root:
-        return []
-    result, stack = [], [root]
-    while stack:
-        node = stack.pop()
-        result.append(node.val)    # process before children
-        if node.right:
-            stack.append(node.right)   # push right first
-        if node.left:
-            stack.append(node.left)    # push left second (processed first)
-    return result
+```csharp
+public List<int> PreorderIter(TreeNode root)
+{
+    if (root == null)
+        return new List<int>();
+    
+    var result = new List<int>();
+    var stack = new Stack<TreeNode>();
+    stack.Push(root);
+    
+    while (stack.Count > 0)
+    {
+        var node = stack.Pop();
+        result.Add(node.Val);  // Process before children
+        
+        if (node.Right != null)
+            stack.Push(node.Right);  // Push right first
+        if (node.Left != null)
+            stack.Push(node.Left);   // Push left second (processed first)
+    }
+    return result;
+}
 ```
 
 **Binary tree postorder traversal — reverse of modified preorder**
-```python
-def postorder_iter(root) -> list:
-    if not root:
-        return []
-    result, stack = [], [root]
-    while stack:
-        node = stack.pop()
-        result.append(node.val)
-        if node.left:
-            stack.append(node.left)    # opposite push order from preorder
-        if node.right:
-            stack.append(node.right)
-    return result[::-1]                # reverse gives left-right-node order
+```csharp
+public List<int> PostorderIter(TreeNode root)
+{
+    if (root == null)
+        return new List<int>();
+    
+    var result = new List<int>();
+    var stack = new Stack<TreeNode>();
+    stack.Push(root);
+    
+    while (stack.Count > 0)
+    {
+        var node = stack.Pop();
+        result.Add(node.Val);
+        
+        if (node.Left != null)
+            stack.Push(node.Left);   // Opposite push order from preorder
+        if (node.Right != null)
+            stack.Push(node.Right);
+    }
+    
+    result.Reverse();  // Reverse gives left-right-node order
+    return result;
+}
 ```
 
 **DFS on a graph with explicit state**
-```python
-# Recursive DFS
-def dfs_rec(graph, node, visited):
-    visited.add(node)
-    for neighbor in graph[node]:
-        if neighbor not in visited:
-            dfs_rec(graph, neighbor, visited)
+```csharp
+// Recursive DFS
+public void DfsRec(Dictionary<int, List<int>> graph, int node, HashSet<int> visited)
+{
+    visited.Add(node);
+    foreach (var neighbor in graph[node])
+    {
+        if (!visited.Contains(neighbor))
+            DfsRec(graph, neighbor, visited);
+    }
+}
 
-# Iterative DFS — push (node, iterator) to resume mid-neighbor-list
-def dfs_iter(graph, start):
-    visited = set()
-    stack = [start]
-    while stack:
-        node = stack.pop()
-        if node in visited:
-            continue
-        visited.add(node)
-        for neighbor in graph[node]:
-            if neighbor not in visited:
-                stack.append(neighbor)
+// Iterative DFS — push (node, iterator) to resume mid-neighbor-list
+public void DfsIter(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int>();
+    var stack = new Stack<int>();
+    stack.Push(start);
+    
+    while (stack.Count > 0)
+    {
+        int node = stack.Pop();
+        if (visited.Contains(node))
+            continue;
+        
+        visited.Add(node);
+        foreach (var neighbor in graph[node])
+        {
+            if (!visited.Contains(neighbor))
+                stack.Push(neighbor);
+        }
+    }
+}
 ```
 
 **Backtracking — iterative using explicit state tuples**
-```python
-# Recursive subsets backtracking
-def subsets_rec(nums):
-    result, path = [], []
-    def bt(start):
-        result.append(path[:])
-        for i in range(start, len(nums)):
-            path.append(nums[i])
-            bt(i + 1)
-            path.pop()
-    bt(0)
-    return result
+```csharp
+// Recursive subsets backtracking
+public List<List<int>> SubsetsRec(int[] nums)
+{
+    var result = new List<List<int>>();
+    var path = new List<int>();
+    
+    void Backtrack(int start)
+    {
+        result.Add(new List<int>(path));
+        for (int i = start; i < nums.Length; i++)
+        {
+            path.Add(nums[i]);
+            Backtrack(i + 1);
+            path.RemoveAt(path.Count - 1);
+        }
+    }
+    
+    Backtrack(0);
+    return result;
+}
 
-# Iterative — push (start_index, current_path) as explicit state
-def subsets_iter(nums):
-    result = []
-    stack = [(0, [])]          # (next index to consider, current subset)
-    while stack:
-        start, path = stack.pop()
-        result.append(path)
-        for i in range(len(nums) - 1, start - 1, -1):   # reverse for correct order
-            stack.append((i + 1, path + [nums[i]]))
-    return result
+// Iterative — push (startIndex, currentPath) as explicit state
+public List<List<int>> SubsetsIter(int[] nums)
+{
+    var result = new List<List<int>>();
+    var stack = new Stack<(int, List<int>)>();  // (nextIndex, currentSubset)
+    stack.Push((0, new List<int>()));
+    
+    while (stack.Count > 0)
+    {
+        var (start, path) = stack.Pop();
+        result.Add(new List<int>(path));
+        
+        for (int i = nums.Length - 1; i >= start; i--)  // Reverse for correct order
+        {
+            var newPath = new List<int>(path) { nums[i] };
+            stack.Push((i + 1, newPath));
+        }
+    }
+    return result;
+}
 ```
 
 ---

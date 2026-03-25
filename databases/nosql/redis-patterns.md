@@ -19,176 +19,244 @@ Redis patterns are compositions of its atomic primitives. The key insight is tha
 ## The Code
 
 **Pattern 1 — Cache-Aside (Lazy Loading)**
-```python
-import redis, json
+```csharp
+using StackExchange.Redis;
+using System.Text.Json;
 
-r = redis.Redis(decode_responses=True)
+var redis = ConnectionMultiplexer.Connect("localhost:6379");
+var db = redis.GetDatabase();
 
-def get_user(user_id: int) -> dict:
-    cache_key = f"user:{user_id}"
+public Dictionary<string, object>? GetUser(int userId)
+{
+    string cacheKey = $"user:{userId}";
+    
+    var cached = db.StringGet(cacheKey);
+    if (cached.HasValue)
+        return JsonSerializer.Deserialize<Dictionary<string, object>>(cached.ToString());  // cache hit
+    
+    var user = db.ExecuteRead("SELECT * FROM users WHERE id = @id", userId);  // pseudo-code
+    db.StringSet(cacheKey, JsonSerializer.Serialize(user), TimeSpan.FromSeconds(300));  // cache for 5 min
+    return user;
+}
 
-    cached = r.get(cache_key)
-    if cached:
-        return json.loads(cached)          # cache hit
-
-    user = db.query("SELECT * FROM users WHERE id = %s", user_id)
-    r.set(cache_key, json.dumps(user), ex=300)  # cache for 5 min
-    return user
-
-def update_user(user_id: int, data: dict):
-    db.execute("UPDATE users SET ... WHERE id = %s", user_id)
-    r.delete(f"user:{user_id}")            # invalidate, don't update
-    # Delete > update: avoids stale writes racing with reads
+public void UpdateUser(int userId, Dictionary<string, object> data)
+{
+    db.ExecuteWrite("UPDATE users SET ... WHERE id = @id", userId);  // pseudo-code
+    db.KeyDelete($"user:{userId}");  // invalidate, don't update
+    // Delete > update: avoids stale writes racing with reads
+}
 ```
 
 **Pattern 2 — Rate Limiter (Fixed Window)**
-```python
-def is_rate_limited(user_id: str, limit: int = 100, window: int = 60) -> bool:
-    key = f"rate:{user_id}:{int(time.time() // window)}"
-
-    # INCR is atomic — no race between read and increment
-    count = r.incr(key)
-
-    if count == 1:
-        r.expire(key, window)   # set TTL only on first increment
-                                # avoids overwriting TTL on subsequent hits
-    return count > limit
+```csharp
+public bool IsRateLimited(string userId, int limit = 100, int window = 60)
+{
+    string key = $"rate:{userId}:{(int)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() / window)}";
+    
+    // INCR is atomic — no race between read and increment
+    long count = db.StringIncrement(key);
+    
+    if (count == 1)
+        db.KeyExpire(key, TimeSpan.FromSeconds(window));  // set TTL only on first increment
+                                                           // avoids overwriting TTL on subsequent hits
+    return count > limit;
+}
 ```
 
 **Pattern 2b — Rate Limiter (Sliding Window with Sorted Set)**
-```python
-import time
-
-def is_rate_limited_sliding(user_id: str, limit: int = 100, window: int = 60) -> bool:
-    now = time.time()
-    key = f"rate:sliding:{user_id}"
-
-    pipe = r.pipeline()
-    pipe.zremrangebyscore(key, 0, now - window)   # remove expired entries
-    pipe.zadd(key, {str(now): now})               # add current request
-    pipe.zcard(key)                               # count requests in window
-    pipe.expire(key, window)
-    results = pipe.execute()
-
-    return results[2] > limit                     # results[2] = zcard result
+```csharp
+public bool IsRateLimitedSliding(string userId, int limit = 100, int window = 60)
+{
+    double now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    string key = $"rate:sliding:{userId}";
+    
+    var trans = db.CreateTransaction();
+    trans.AddCondition(Condition.StringEqual("__unused__", "__unused__"));  // dummy condition
+    
+    // Remove expired entries
+    trans.SortedSetRemoveByScoreAsync(key, double.NegativeInfinity, now - (window * 1000));
+    // Add current request
+    trans.SortedSetAddAsync(key, now.ToString(), now);
+    // Count requests in window
+    trans.SortedSetLengthAsync(key);
+    // Set expiry
+    trans.KeyExpireAsync(key, TimeSpan.FromSeconds(window));
+    
+    var results = trans.Execute();
+    long count = (long)results[2];  // results[2] = ZCARD result
+    
+    return count > limit;
+}
 ```
 
 **Pattern 3 — Distributed Lock**
-```python
-import uuid, time
+```csharp
+using System;
+using StackExchange.Redis;
 
-class RedisLock:
-    def __init__(self, r, key: str, ttl: int = 10):
-        self.r   = r
-        self.key = f"lock:{key}"
-        self.ttl = ttl
-        self.val = str(uuid.uuid4())   # unique owner token
+public class RedisLock : IDisposable
+{
+    private readonly IDatabase _db;
+    private readonly string _key;
+    private readonly int _ttl;
+    private readonly string _val;
 
-    def acquire(self, timeout: int = 5) -> bool:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.r.set(self.key, self.val, nx=True, ex=self.ttl):
-                return True
-            time.sleep(0.05)
-        return False
+    public RedisLock(IDatabase db, string key, int ttl = 10)
+    {
+        _db = db;
+        _key = $"lock:{key}";
+        _ttl = ttl;
+        _val = Guid.NewGuid().ToString();  // unique owner token
+    }
 
-    def release(self):
-        # Lua script: check owner AND delete in one atomic operation
-        # Without this, we might delete another owner's lock
-        script = """
-        if redis.call("get", KEYS[1]) == ARGV[1] then
-            return redis.call("del", KEYS[1])
-        else
-            return 0
-        end
-        """
-        self.r.eval(script, 1, self.key, self.val)
+    public bool Acquire(int timeout = 5)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (_db.StringSet(_key, _val, TimeSpan.FromSeconds(_ttl), When.NotExists))
+                return true;
+            System.Threading.Thread.Sleep(50);
+        }
+        return false;
+    }
 
-    def __enter__(self):
-        if not self.acquire():
-            raise TimeoutError(f"Could not acquire lock: {self.key}")
-        return self
+    public void Release()
+    {
+        // Lua script: check owner AND delete in one atomic operation
+        // Without this, we might delete another owner's lock
+        var script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+        _db.ScriptEvaluate(script, new RedisKey[] { _key }, new RedisValue[] { _val });
+    }
 
-    def __exit__(self, *_):
-        self.release()
+    public void Dispose()
+    {
+        Release();
+    }
+}
 
-# Usage
-with RedisLock(r, "payment:user:42"):
-    process_payment()
+// Usage
+var db = ConnectionMultiplexer.Connect("localhost:6379").GetDatabase();
+using (var @lock = new RedisLock(db, "payment:user:42"))
+{
+    if (@lock.Acquire())
+    {
+        // ProcessPayment();
+    }
+}
 ```
 
 **Pattern 4 — Leaderboard**
-```python
-def submit_score(user_id: str, score: float):
-    # ZADD with GT: only updates if new score is greater than existing
-    r.zadd("leaderboard:global", {user_id: score}, gt=True)
+```csharp
+public void SubmitScore(string userId, double score)
+{
+    // ZADD with GT: only updates if new score is greater than existing
+    db.SortedSetAdd("leaderboard:global", userId, score, flags: CommandFlags.FireAndForget);
+}
 
-def get_top(n: int = 10) -> list[dict]:
-    # zrevrange: highest score first
-    results = r.zrevrange("leaderboard:global", 0, n - 1, withscores=True)
-    return [{"user": uid, "score": score} for uid, score in results]
+public List<(string userId, double score)> GetTop(int n = 10)
+{
+    // ZREVRANGE: highest score first
+    var results = db.SortedSetRangeByRankWithScores("leaderboard:global", 0, n - 1, Order.Descending);
+    var list = new List<(string, double)>();
+    foreach (var item in results)
+        list.Add((item.Element.ToString()!, item.Score));
+    return list;
+}
 
-def get_rank(user_id: str) -> int | None:
-    rank = r.zrevrank("leaderboard:global", user_id)
-    return rank + 1 if rank is not None else None   # 1-indexed
+public int? GetRank(string userId)
+{
+    long? rank = db.SortedSetRank("leaderboard:global", userId, Order.Descending);
+    return rank.HasValue ? (int)(rank + 1) : null;  // 1-indexed
+}
 
-def get_around(user_id: str, radius: int = 2) -> list[dict]:
-    rank = r.zrevrank("leaderboard:global", user_id)
-    if rank is None:
-        return []
-    start = max(0, rank - radius)
-    end   = rank + radius
-    results = r.zrevrange("leaderboard:global", start, end, withscores=True)
-    return [{"user": uid, "score": score} for uid, score in results]
+public List<(string userId, double score)> GetAround(string userId, int radius = 2)
+{
+    long? rank = db.SortedSetRank("leaderboard:global", userId, Order.Descending);
+    if (!rank.HasValue)
+        return new List<(string, double)>();
+    int start = Math.Max(0, (int)(rank - radius));
+    int end = (int)(rank + radius);
+    var results = db.SortedSetRangeByRankWithScores("leaderboard:global", start, end, Order.Descending);
+    var list = new List<(string, double)>();
+    foreach (var item in results)
+        list.Add((item.Element.ToString()!, item.Score));
+    return list;
+}
 ```
 
 **Pattern 5 — Reliable Queue with Streams**
-```python
-# Streams > Pub/Sub for reliable messaging — messages persist and can be replayed
+```csharp
+// Streams > Pub/Sub for reliable messaging — messages persist and can be replayed
 
-# Producer
-def enqueue(stream: str, payload: dict):
-    r.xadd(stream, payload, maxlen=10_000)   # cap stream length
+// Producer
+public void Enqueue(string stream, string payload)
+{
+    db.StreamAdd(stream, "payload", payload, maxLength: 10_000);  // cap stream length
+}
 
-# Consumer with consumer group — each message delivered to one consumer
-r.xgroup_create("jobs", "workers", id="0", mkstream=True)
+// Consumer setup
+var streamKey = "jobs";
+var groupName = "workers";
+db.StreamCreateConsumerGroup(streamKey, groupName, StreamPosition.NewMessages, createStream: true);
 
-def consume(stream: str, group: str, consumer: str):
-    while True:
-        messages = r.xreadgroup(
-            group, consumer, {stream: ">"}, count=10, block=2000
-        )
-        for _, entries in (messages or []):
-            for msg_id, data in entries:
-                try:
-                    process(data)
-                    r.xack(stream, group, msg_id)   # ack only after success
-                except Exception:
-                    pass   # message stays pending — redelivered on timeout
+public void Consume(string stream, string group, string consumer)
+{
+    while (true)
+    {
+        var messages = db.StreamReadGroup(stream, group, consumer, count: 10, noAck: false);
+        foreach (var msg in messages)
+        {
+            try
+            {
+                // Process(msg.Values);
+                db.StreamAcknowledge(stream, group, msg.Id);  // ack only after success
+            }
+            catch (Exception)
+            {
+                // message stays pending — redelivered on timeout
+            }
+        }
+    }
+}
 ```
 
 **Pattern 6 — Session Storage**
-```python
-import uuid, json
+```csharp
+using System;
+using StackExchange.Redis;
 
-def create_session(user_id: int, ttl: int = 86400) -> str:
-    session_id = str(uuid.uuid4())
-    r.hset(f"session:{session_id}", mapping={
-        "user_id": user_id,
-        "created": int(time.time()),
-    })
-    r.expire(f"session:{session_id}", ttl)
-    return session_id
+public string CreateSession(int userId, int ttl = 86400)
+{
+    string sessionId = Guid.NewGuid().ToString();
+    var hashKey = $"session:{sessionId}";
+    var hashEntry = new HashEntry[] 
+    {
+        new HashEntry("user_id", userId),
+        new HashEntry("created", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+    };
+    db.HashSet(hashKey, hashEntry);
+    db.KeyExpire(hashKey, TimeSpan.FromSeconds(ttl));
+    return sessionId;
+}
 
-def get_session(session_id: str) -> dict | None:
-    data = r.hgetall(f"session:{session_id}")
-    if not data:
-        return None
-    r.expire(f"session:{session_id}", 86400)   # sliding expiry on access
-    return data
+public Dictionary<string, string>? GetSession(string sessionId)
+{
+    string hashKey = $"session:{sessionId}";
+    var data = db.HashGetAll(hashKey);
+    if (data.Length == 0)
+        return null;
+    var dict = new Dictionary<string, string>();
+    foreach (var entry in data)
+        dict[entry.Name.ToString()] = entry.Value.ToString();
+    db.KeyExpire(hashKey, TimeSpan.FromSeconds(86400));  // sliding expiry on access
+    return dict;
+}
 
-def delete_session(session_id: str):
-    r.delete(f"session:{session_id}")
+public void DeleteSession(string sessionId)
+{
+    db.KeyDelete($"session:{sessionId}");
+}
 ```
 
 ---

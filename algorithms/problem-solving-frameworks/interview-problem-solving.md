@@ -16,101 +16,117 @@ Interviewers evaluate process as much as correctness. A candidate who talks thro
 ## The Code
 
 **The six-phase framework**
-```python
-# PHASE 1: UNDERSTAND (2-3 minutes)
-# - Restate the problem in your own words
-# - Clarify constraints: input size, value ranges, nulls, duplicates
-# - Ask: sorted? unique? integers only? what if empty input?
-# - Don't assume — ask. Wrong assumptions waste 20 minutes.
+```csharp
+// PHASE 1: UNDERSTAND (2-3 minutes)
+// - Restate the problem in your own words
+// - Clarify constraints: input size, value ranges, nulls, duplicates
+// - Ask: sorted? unique? integers only? what if empty input?
+// - Don't assume — ask. Wrong assumptions waste 20 minutes.
 
-# PHASE 2: EXAMPLES (2-3 minutes)
-# - Work through 2-3 concrete examples by hand, including edge cases
-# - Edge cases: empty input, single element, all same, already sorted,
-#   negatives, max/min values, no valid answer
-# - This often reveals the algorithm before you even think about it
+// PHASE 2: EXAMPLES (2-3 minutes)
+// - Work through 2-3 concrete examples by hand, including edge cases
+// - Edge cases: empty input, single element, all same, already sorted,
+//   negatives, max/min values, no valid answer
+// - This often reveals the algorithm before you even think about it
 
-# PHASE 3: APPROACH (3-5 minutes)
-# - Verbalize the brute-force solution first, with its complexity
-# - Then ask: can I sort first? can I use a hash map? can I use two pointers?
-# - Identify the pattern: see common-patterns-map.md
-# - Agree on approach with interviewer BEFORE writing code
-# - State time and space complexity of your planned approach
+// PHASE 3: APPROACH (3-5 minutes)
+// - Verbalize the brute-force solution first, with its complexity
+// - Then ask: can I sort first? can I use a hash map? can I use two pointers?
+// - Identify the pattern: see common-patterns-map.md
+// - Agree on approach with interviewer BEFORE writing code
+// - State time and space complexity of your planned approach
 
-# PHASE 4: CODE (10-15 minutes)
-# - Write clean, readable code — name variables clearly
-# - Handle edge cases as you go, don't defer them
-# - Narrate what you're doing: "I'm using a sliding window here because..."
-# - If stuck: restate what you know, work a small example by hand
+// PHASE 4: CODE (10-15 minutes)
+// - Write clean, readable code — name variables clearly
+// - Handle edge cases as you go, don't defer them
+// - Narrate what you're doing: "I'm using a sliding window here because..."
+// - If stuck: restate what you know, work a small example by hand
 
-# PHASE 5: VERIFY (3-5 minutes)
-# - Trace through your code with a simple example — not just mentally, on paper
-# - Check: does the loop terminate? are indices correct? does it handle empty?
-# - Fix bugs you find — interviewers want to see you catch your own mistakes
+// PHASE 5: VERIFY (3-5 minutes)
+// - Trace through your code with a simple example — not just mentally, on paper
+// - Check: does the loop terminate? are indices correct? does it handle empty?
+// - Fix bugs you find — interviewers want to see you catch your own mistakes
 
-# PHASE 6: OPTIMIZE (if time allows)
-# - Can time complexity be reduced?
-# - Can space complexity be reduced?
-# - Are there any edge cases still unhandled?
+// PHASE 6: OPTIMIZE (if time allows)
+// - Can time complexity be reduced?
+// - Can space complexity be reduced?
+// - Are there any edge cases still unhandled?
 ```
 
 **Pattern recognition — the first question to ask**
-```python
-def identify_pattern(problem_description: str) -> str:
-    signals = {
-        "sorted array + find pair/triplet":       "two pointers",
-        "subarray sum/length with constraint":    "sliding window",
-        "linked list cycle/midpoint":             "fast/slow pointers",
-        "shortest path, unweighted":              "BFS",
-        "shortest path, weighted, non-negative":  "Dijkstra",
-        "all paths / cycle detection / DFS":      "DFS / backtracking",
-        "top-k / streaming min-max":              "heap",
-        "sorted lookup / boundary search":        "binary search",
-        "count ways / optimal value":             "dynamic programming",
-        "interval overlap / scheduling":          "greedy + sort by end",
-        "prefix/common string operations":        "trie",
-        "XOR / flags / subset enumeration":       "bit manipulation",
-        "range query on mutable array":           "segment tree",
-    }
-    # This isn't code — it's a mental map.
-    # The real skill is pattern-matching on first read.
+```csharp
+string IdentifyPattern(string problemDescription)
+{
+    var signals = new Dictionary<string, string>
+    {
+        { "sorted array + find pair/triplet", "two pointers" },
+        { "subarray sum/length with constraint", "sliding window" },
+        { "linked list cycle/midpoint", "fast/slow pointers" },
+        { "shortest path, unweighted", "BFS" },
+        { "shortest path, weighted, non-negative", "Dijkstra" },
+        { "all paths / cycle detection / DFS", "DFS / backtracking" },
+        { "top-k / streaming min-max", "heap" },
+        { "sorted lookup / boundary search", "binary search" },
+        { "count ways / optimal value", "dynamic programming" },
+        { "interval overlap / scheduling", "greedy + sort by end" },
+        { "prefix/common string operations", "trie" },
+        { "XOR / flags / subset enumeration", "bit manipulation" },
+        { "range query on mutable array", "segment tree" }
+    };
+    
+    // This isn't code — it's a mental map.
+    // The real skill is pattern-matching on first read.
+    return "Use the signals above to match problem description to algorithm.";
+}
 ```
 
 **The brute-force-first discipline**
-```python
-def two_sum_brute(nums: list, target: int) -> tuple:
-    # Always state this first: O(n²) time, O(1) space
-    for i in range(len(nums)):
-        for j in range(i + 1, len(nums)):
-            if nums[i] + nums[j] == target:
-                return (i, j)
-    return (-1, -1)
+```csharp
+public (int, int) TwoSumBrute(int[] nums, int target)
+{
+    // Always state this first: O(n²) time, O(1) space
+    for (int i = 0; i < nums.Length; i++)
+    {
+        for (int j = i + 1; j < nums.Length; j++)
+        {
+            if (nums[i] + nums[j] == target)
+                return (i, j);
+        }
+    }
+    return (-1, -1);
+}
 
-# Then say: "I can do better — hash map gives O(n) time, O(n) space"
-def two_sum_optimal(nums: list, target: int) -> tuple:
-    seen = {}
-    for i, num in enumerate(nums):
-        complement = target - num
-        if complement in seen:
-            return (seen[complement], i)
-        seen[num] = i
-    return (-1, -1)
+// Then say: "I can do better — hash map gives O(n) time, O(n) space"
+public (int, int) TwoSumOptimal(int[] nums, int target)
+{
+    var seen = new Dictionary<int, int>();
+    for (int i = 0; i < nums.Length; i++)
+    {
+        int complement = target - nums[i];
+        if (seen.ContainsKey(complement))
+            return (seen[complement], i);
+        if (!seen.ContainsKey(nums[i]))
+            seen[nums[i]] = i;
+    }
+    return (-1, -1);
+}
 ```
 
 **What to say when stuck**
-```python
-# DO say:
-# "Let me restate what I know: I have a sorted array and need to find..."
-# "Let me try a small example — if nums = [1,2,3], target = 4..."
-# "I'm thinking about using a hash map to trade space for time..."
-# "I know the brute force is O(n²) — I'm looking for a way to eliminate the inner loop..."
-# "I don't know the optimal solution yet, but let me start with brute force
-#  and see if the structure suggests an improvement..."
+```csharp
+// DO say:
+// "Let me restate what I know: I have a sorted array and need to find..."
+// "Let me try a small example — if nums = [1,2,3], target = 4..."
+// "I'm thinking about using a hash map to trade space for time..."
+// "I know the brute force is O(n²) — I'm looking for a way to eliminate the inner loop..."
+// "I don't know the optimal solution yet, but let me start with brute force
+//  and see if the structure suggests an improvement..."
 
-# DON'T:
-# Go silent for more than 30 seconds
-# Start coding before you have an approach
-# Say "I don't know" and stop — always have a next step
-# Skip to the "clever" solution without stating brute force first
+// DON'T:
+// - Go silent for more than 30 seconds
+// - Start coding before you have an approach
+// - Say "I don't know" and stop — always have a next step
+// - Skip to the "clever" solution without stating brute force first
 ```
 
 ---

@@ -186,32 +186,33 @@ SELECT now() - pg_last_xact_replay_timestamp() AS replication_lag;
 ```
 
 **Alerting thresholds — what to page on**
-```python
-# These are reasonable starting thresholds — tune to your workload
+```csharp
+// These are reasonable starting thresholds — tune to your workload
 
-ALERT_RULES = {
-    # Connections
-    "connection_usage_pct":   {"warn": 70, "critical": 90},
+var alertRules = new Dictionary<string, Dictionary<string, int>>
+{
+    // Connections
+    { "connection_usage_pct", new Dictionary<string, int> { { "warn", 70 }, { "critical", 90 } } },
 
-    # Replication
-    "replication_lag_seconds": {"warn": 30, "critical": 120},
+    // Replication
+    { "replication_lag_seconds", new Dictionary<string, int> { { "warn", 30 }, { "critical", 120 } } },
 
-    # Query performance
-    "slow_query_pct_above_1s": {"warn": 5,  "critical": 20},  # % of queries > 1s
+    // Query performance
+    { "slow_query_pct_above_1s", new Dictionary<string, int> { { "warn", 5 }, { "critical", 20 } } },
 
-    # Locks
-    "blocked_queries":         {"warn": 1,  "critical": 5},
-    "lock_wait_seconds":       {"warn": 10, "critical": 30},
+    // Locks
+    { "blocked_queries", new Dictionary<string, int> { { "warn", 1 }, { "critical", 5 } } },
+    { "lock_wait_seconds", new Dictionary<string, int> { { "warn", 10 }, { "critical", 30 } } },
 
-    # Storage
-    "disk_usage_pct":          {"warn": 75, "critical": 90},
+    // Storage
+    { "disk_usage_pct", new Dictionary<string, int> { { "warn", 75 }, { "critical", 90 } } },
 
-    # Cache
-    "cache_hit_pct_below":     {"warn": 98, "critical": 95},  # alert if it drops below
+    // Cache
+    { "cache_hit_pct_below", new Dictionary<string, int> { { "warn", 98 }, { "critical", 95 } } },
 
-    # Bloat
-    "dead_tuple_pct":          {"warn": 10, "critical": 25},
-}
+    // Bloat
+    { "dead_tuple_pct", new Dictionary<string, int> { { "warn", 10 }, { "critical", 25 } } },
+};
 ```
 
 **Prometheus + postgres_exporter setup**

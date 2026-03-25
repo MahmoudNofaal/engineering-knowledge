@@ -18,87 +18,133 @@ The core is an event-driven pipeline. Your main app publishes an event ("user li
 
 ## The Code
 
-```python
-# Event producer — publishes to a queue (Kafka/SQS example)
-import json
-import boto3
+```csharp
+// Event producer — publishes to a queue (AWS SQS example)
+using Amazon.SQS;
+using Amazon.SQS.Model;
+using System.Text.Json;
 
-sqs = boto3.client('sqs', region_name='us-east-1')
-QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789/notifications"
+public class NotificationPublisher
+{
+    private readonly AmazonSQSClient _sqs;
+    private const string QueueUrl = "https://sqs.us-east-1.amazonaws.com/123456789/notifications";
 
-def publish_notification_event(event: dict):
-    """
-    event = {
-        "type": "like",
-        "actor_id": 42,
-        "recipient_id": 99,
-        "entity_id": 1001,
-        "idempotency_key": "like-42-99-1001"
+    public NotificationPublisher()
+    {
+        _sqs = new AmazonSQSClient();
     }
-    """
-    sqs.send_message(
-        QueueUrl=QUEUE_URL,
-        MessageBody=json.dumps(event),
-        MessageDeduplicationId=event["idempotency_key"],  # Prevents duplicates
-        MessageGroupId=str(event["recipient_id"])         # FIFO per user
-    )
+
+    public async Task PublishNotificationEvent(Dictionary<string, object> evt)
+    {
+        /*
+        evt = {
+            "type": "like",
+            "actor_id": 42,
+            "recipient_id": 99,
+            "entity_id": 1001,
+            "idempotency_key": "like-42-99-1001"
+        }
+        */
+        var message = JsonSerializer.Serialize(evt);
+        var request = new SendMessageRequest
+        {
+            QueueUrl = QueueUrl,
+            MessageBody = message,
+            MessageDeduplicationId = evt["idempotency_key"].ToString(),  // Prevents duplicates
+            MessageGroupId = evt["recipient_id"].ToString()              // FIFO per user
+        };
+        await _sqs.SendMessageAsync(request);
+    }
+}
 ```
 
-```python
-# Notification worker — processes events and routes to channels
-import json
+```csharp
+// Notification worker — processes events and routes to channels
+using System;
+using System.Collections.Generic;
+using System.Text.Json;
 
-class NotificationWorker:
-    def __init__(self, user_prefs_db, push_service, email_service, sms_service):
-        self.prefs = user_prefs_db
-        self.push = push_service
-        self.email = email_service
-        self.sms = sms_service
+public class NotificationWorker
+{
+    private readonly Dictionary<string, Dictionary<string, object>> _userPrefs;
+    private readonly object _pushService;
+    private readonly object _emailService;
+    private readonly object _smsService;
 
-    def process(self, raw_message: str):
-        event = json.loads(raw_message)
-        user_id = event["recipient_id"]
+    public NotificationWorker(
+        Dictionary<string, Dictionary<string, object>> userPrefs,
+        object pushService, object emailService, object smsService)
+    {
+        _userPrefs = userPrefs;
+        _pushService = pushService;
+        _emailService = emailService;
+        _smsService = smsService;
+    }
 
-        prefs = self.prefs.get(user_id)
-        if not prefs or prefs.get("opt_out_all"):
-            return  # Respect opt-outs before any work
+    public async Task ProcessAsync(string rawMessage)
+    {
+        var evt = JsonSerializer.Deserialize<Dictionary<string, object>>(rawMessage);
+        var userId = Convert.ToInt64(evt["recipient_id"]);
 
-        message = self._render_message(event)
-
-        # Fan out to enabled channels
-        if prefs.get("push_enabled") and prefs.get("device_token"):
-            self._send_with_retry(
-                self.push.send, prefs["device_token"], message
-            )
-        if prefs.get("email_enabled") and prefs.get("email"):
-            self._send_with_retry(
-                self.email.send, prefs["email"], message
-            )
-        if prefs.get("sms_enabled") and prefs.get("phone"):
-            self._send_with_retry(
-                self.sms.send, prefs["phone"], message
-            )
-
-    def _send_with_retry(self, fn, target, message, max_retries=3):
-        for attempt in range(max_retries):
-            try:
-                fn(target, message)
-                return
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    # Dead-letter queue the failure
-                    print(f"Failed after {max_retries} attempts: {e}")
-                else:
-                    import time
-                    time.sleep(2 ** attempt)  # Exponential backoff
-
-    def _render_message(self, event: dict) -> str:
-        templates = {
-            "like": "Someone liked your post.",
-            "follow": "You have a new follower.",
-            "comment": "Someone commented on your post."
+        if (!_userPrefs.ContainsKey(userId.ToString()) || 
+            Convert.ToBoolean(_userPrefs[userId.ToString()].GetValueOrDefault("opt_out_all")))
+        {
+            return;  // Respect opt-outs before any work
         }
-        return templates.get(event["type"], "You have a new notification.")
+
+        var prefs = _userPrefs[userId.ToString()];
+        var message = RenderMessage(evt);
+
+        // Fan out to enabled channels
+        if (Convert.ToBoolean(prefs.GetValueOrDefault("push_enabled")) && prefs.ContainsKey("device_token"))
+            await SendWithRetryAsync(() => SendPush(message), maxRetries: 3);
+
+        if (Convert.ToBoolean(prefs.GetValueOrDefault("email_enabled")) && prefs.ContainsKey("email"))
+            await SendWithRetryAsync(() => SendEmail(message), maxRetries: 3);
+
+        if (Convert.ToBoolean(prefs.GetValueOrDefault("sms_enabled")) && prefs.ContainsKey("phone"))
+            await SendWithRetryAsync(() => SendSMS(message), maxRetries: 3);
+    }
+
+    private async Task SendWithRetryAsync(Func<Task> fn, int maxRetries = 3)
+    {
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
+            {
+                await fn();
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (attempt == maxRetries - 1)
+                {
+                    // Dead-letter queue the failure
+                    Console.WriteLine($"Failed after {maxRetries} attempts: {ex.Message}");
+                }
+                else
+                {
+                    await Task.Delay((int)Math.Pow(2, attempt) * 1000);  // Exponential backoff
+                }
+            }
+        }
+    }
+
+    private string RenderMessage(Dictionary<string, object> evt)
+    {
+        var templates = new Dictionary<string, string>
+        {
+            { "like", "Someone liked your post." },
+            { "follow", "You have a new follower." },
+            { "comment", "Someone commented on your post." }
+        };
+        return templates.GetValueOrDefault(evt["type"].ToString(), "You have a new notification.");
+    }
+
+    private Task SendPush(string message) => Task.CompletedTask;  // Stub
+    private Task SendEmail(string message) => Task.CompletedTask;  // Stub
+    private Task SendSMS(string message) => Task.CompletedTask;  // Stub
+}
 ```
 
 ```sql

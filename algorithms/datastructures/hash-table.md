@@ -15,67 +15,112 @@ A hash function takes a key and maps it to an index in an array. Ideally each ke
 
 ## The Code
 
-**Python dict — the standard hash table**
-```python
-freq = {}
-items = ['a', 'b', 'a', 'c', 'b', 'a']
+**C# Dictionary — the standard hash table**
+```csharp
+var freq = new Dictionary<string, int>();
+var items = new[] { "a", "b", "a", "c", "b", "a" };
 
-for item in items:
-    freq[item] = freq.get(item, 0) + 1  # O(1) average per operation
+foreach (var item in items)
+{
+    if (freq.ContainsKey(item))
+        freq[item]++;
+    else
+        freq[item] = 1;  // O(1) average per operation
+}
 
-print(freq)  # {'a': 3, 'b': 2, 'c': 1}
+Console.WriteLine(string.Join(", ", freq));  // {'a': 3, 'b': 2, 'c': 1}
 ```
 
 **Two-sum — O(n) with a hash map**
-```python
-def two_sum(nums: list, target: int) -> tuple:
-    seen = {}  # value → index
-    for i, num in enumerate(nums):
-        complement = target - num
-        if complement in seen:
-            return (seen[complement], i)
-        seen[num] = i
-    return (-1, -1)
+```csharp
+public static (int, int) TwoSum(List<int> nums, int target)
+{
+    var seen = new Dictionary<int, int>();  // value → index
+    for (int i = 0; i < nums.Count; i++)
+    {
+        int complement = target - nums[i];
+        if (seen.ContainsKey(complement))
+            return (seen[complement], i);
+        if (!seen.ContainsKey(nums[i]))
+            seen[nums[i]] = i;
+    }
+    return (-1, -1);
+}
 ```
 
-**Frequency count and deduplication**
-```python
-from collections import Counter, defaultdict
+**Frequency count and grouping**
+```csharp
+using System.Linq;
 
-# Count frequencies
-counter = Counter(['a', 'b', 'a', 'c'])
-print(counter.most_common(2))  # [('a', 2), ('b', 1)]
+// Count frequencies
+var counter = new Dictionary<string, int>();
+foreach (var item in new[] { "a", "b", "a", "c" })
+{
+    if (counter.ContainsKey(item))
+        counter[item]++;
+    else
+        counter[item] = 1;
+}
+// Get most common 2
+var mostCommon = counter.OrderByDescending(x => x.Value).Take(2);
+foreach (var kvp in mostCommon)
+    Console.WriteLine($"({kvp.Key}, {kvp.Value})");  // (a, 2), (b, 1)
 
-# Group items by key
-groups = defaultdict(list)
-for word in ['cat', 'car', 'bat', 'can']:
-    groups[word[0]].append(word)
-# {'c': ['cat', 'car', 'can'], 'b': ['bat']}
+// Group items by key
+var groups = new Dictionary<char, List<string>>();
+foreach (var word in new[] { "cat", "car", "bat", "can" })
+{
+    char key = word[0];
+    if (!groups.ContainsKey(key))
+        groups[key] = new List<string>();
+    groups[key].Add(word);
+}
+// {'c': ['cat', 'car', 'can'], 'b': ['bat']}
 ```
 
 **Implementing a basic hash table from scratch**
-```python
-class HashTable:
-    def __init__(self, size: int = 16):
-        self.buckets = [[] for _ in range(size)]
+```csharp
+public class HashTable
+{
+    private List<(string key, object value)>[] buckets;
 
-    def _hash(self, key: str) -> int:
-        return hash(key) % len(self.buckets)
+    public HashTable(int size = 16)
+    {
+        buckets = new List<(string, object)>[size];
+        for (int i = 0; i < size; i++)
+            buckets[i] = new List<(string, object)>();
+    }
 
-    def put(self, key: str, value) -> None:
-        bucket = self.buckets[self._hash(key)]
-        for i, (k, v) in enumerate(bucket):
-            if k == key:
-                bucket[i] = (key, value)  # update existing
-                return
-        bucket.append((key, value))  # new entry via chaining
+    private int Hash(string key)
+    {
+        return key.GetHashCode() % buckets.Length;
+    }
 
-    def get(self, key: str):
-        bucket = self.buckets[self._hash(key)]
-        for k, v in bucket:
-            if k == key:
-                return v
-        return None
+    public void Put(string key, object value)
+    {
+        var bucket = buckets[Hash(key)];
+        for (int i = 0; i < bucket.Count; i++)
+        {
+            if (bucket[i].key == key)
+            {
+                bucket[i] = (key, value);  // update existing
+                return;
+            }
+        }
+        bucket.Add((key, value));  // new entry via chaining
+    }
+
+    public object Get(string key)
+    {
+        var bucket = buckets[Hash(key)];
+        foreach (var (k, v) in bucket)
+        {
+            if (k == key)
+                return v;
+        }
+        return null;
+    }
+}
 ```
 
 ---
