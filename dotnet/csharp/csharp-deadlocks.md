@@ -1,155 +1,102 @@
 # C# Deadlocks
 
-> A deadlock is when two or more threads block each other permanently because each is waiting for a resource the other holds.
+> A deadlock is a permanent standstill where two or more threads each hold a resource the other needs — none can proceed, the application hangs silently.
 
 ---
 
-## When To Use It
+## Quick Reference
 
-This isn't a pattern to use — it's a failure mode to understand and avoid. It matters any time you mix synchronous blocking (`.Result`, `.Wait()`, `lock`) with async code, or when multiple threads acquire shared locks in inconsistent order. Understanding deadlocks is essential when writing ASP.NET middleware, library code that may be called from any synchronization context, or anything that touches shared state across threads.
+| Deadlock type | Classic cause | Fix |
+|---|---|---|
+| Lock ordering | Thread A holds L1, waits for L2; Thread B holds L2, waits for L1 | Consistent lock order |
+| `async`/`sync` blocking | `.Result` / `.Wait()` on `Task` with `SynchronizationContext` | Always `await` |
+| Re-entry | Single-thread semaphore waiting on itself | Re-entrant lock or `AsyncLocal` guard |
 
 ---
 
 ## Core Concept
 
-A deadlock needs four conditions to exist simultaneously: mutual exclusion (only one thread can hold a resource), hold and wait (a thread holds one resource while waiting for another), no preemption (you can't forcibly take a resource from a thread), and circular wait (thread A waits on thread B which waits on thread A). In .NET, the most common deadlock isn't the classic two-lock circular wait — it's sync-over-async: you call `.Result` or `.Wait()` on a `Task` on a thread that owns a `SynchronizationContext` (like an ASP.NET Framework request thread or a UI thread). The `await` continuation needs that same thread to resume, but it's blocked waiting for the task. Neither can proceed.
+A deadlock requires four conditions simultaneously: mutual exclusion, hold and wait, no preemption, and circular wait. Eliminating any one breaks the deadlock. In practice, you target **circular wait** (consistent lock ordering) and **hold and wait** (acquire all resources atomically or release before waiting).
+
+The async/await deadlock is the most common in .NET: calling `.Result` or `.Wait()` on a `Task` in an environment with a `SynchronizationContext` (WPF, WinForms, classic ASP.NET) blocks the context thread; the awaiting continuation needs to resume on that thread; neither can proceed.
 
 ---
 
 ## The Code
+
+**Lock ordering deadlock — and the fix**
 ```csharp
-// --- Classic sync-over-async deadlock (ASP.NET Framework / UI thread) ---
-// This DEADLOCKS on any SynchronizationContext that marshals continuations
-// back to the original thread (WinForms, WPF, ASP.NET Framework).
-public string GetData()
+// DEADLOCK: Thread A locks accountA then waits for accountB
+//           Thread B locks accountB then waits for accountA
+void TransferBad(Account from, Account to, decimal amount)
 {
-    return FetchAsync().Result; // blocks the thread that owns the context
+    lock (from) { lock (to) { from.Balance -= amount; to.Balance += amount; } }
 }
 
-private async Task<string> FetchAsync()
+// FIX: always lock in a consistent order — e.g. lower Id first
+void TransferSafe(Account from, Account to, decimal amount)
 {
-    await Task.Delay(100); // tries to resume on the captured context — which is blocked
-    return "data";
+    var first  = from.Id < to.Id ? from : to;
+    var second = from.Id < to.Id ? to   : from;
+    lock (first) { lock (second) { from.Balance -= amount; to.Balance += amount; } }
 }
+```
 
-// Fix 1: go async all the way up
-public async Task<string> GetDataAsync()
-{
-    return await FetchAsync();
-}
+**Async/sync deadlock — `.Result` with SynchronizationContext**
+```csharp
+// DEADLOCK in WinForms/WPF or classic ASP.NET:
+// The UI thread calls .Result, blocking it.
+// The continuation from GetDataAsync needs to resume on the UI thread.
+// The UI thread is blocked waiting for the completion — deadlock.
+string data = GetDataAsync().Result; // DEADLOCK in UI context
 
-// Fix 2: use ConfigureAwait(false) in library code so the continuation
-// does NOT need the original context to resume
-private async Task<string> FetchAsync()
-{
-    await Task.Delay(100).ConfigureAwait(false);
-    return "data";
-}
+// FIX 1: always async all the way — never mix sync blocking and async
+string data = await GetDataAsync();
 
-// --- Classic two-lock deadlock ---
-private static readonly object _lockA = new();
-private static readonly object _lockB = new();
+// FIX 2: ConfigureAwait(false) in library code avoids capturing UI context
+async Task<string> GetDataAsync()
+    => await HttpClient.GetStringAsync("https://...").ConfigureAwait(false);
+```
 
-// Thread 1: acquires A then tries to acquire B
-void Thread1()
-{
-    lock (_lockA)
-    {
-        Thread.Sleep(50); // gives Thread 2 time to grab B
-        lock (_lockB) { /* work */ }
-    }
-}
-
-// Thread 2: acquires B then tries to acquire A
-void Thread2()
-{
-    lock (_lockB)
-    {
-        lock (_lockA) { /* work */ }
-    }
-}
-
-// Fix: always acquire locks in the same order everywhere
-void Thread1Fixed()
-{
-    lock (_lockA) { lock (_lockB) { /* work */ } }
-}
-void Thread2Fixed()
-{
-    lock (_lockA) { lock (_lockB) { /* work */ } }
-}
-
-// --- Using Monitor.TryEnter to detect and bail instead of blocking forever ---
-bool gotA = false, gotB = false;
-try
-{
-    Monitor.TryEnter(_lockA, TimeSpan.FromSeconds(1), ref gotA);
-    Monitor.TryEnter(_lockB, TimeSpan.FromSeconds(1), ref gotB);
-
-    if (!gotA || !gotB)
-    {
-        // couldn't acquire both — log, retry, or throw
-        throw new TimeoutException("Could not acquire locks; possible deadlock.");
-    }
-    // do work
-}
-finally
-{
-    if (gotB) Monitor.Exit(_lockB);
-    if (gotA) Monitor.Exit(_lockA);
-}
-
-// --- SemaphoreSlim async-friendly locking (avoids sync deadlock entirely) ---
-private static readonly SemaphoreSlim _sem = new(1, 1);
-
-public async Task DoWorkAsync(CancellationToken ct)
-{
-    await _sem.WaitAsync(ct); // yields instead of blocking the thread
-    try
-    {
-        await SomeAsyncOperation().ConfigureAwait(false);
-    }
-    finally
-    {
-        _sem.Release();
-    }
-}
+**Detecting with timeout**
+```csharp
+// Add timeouts to detect deadlocks during development
+if (!Monitor.TryEnter(lockObj, TimeSpan.FromSeconds(5)))
+    throw new TimeoutException("Potential deadlock: could not acquire lock within 5s");
 ```
 
 ---
 
 ## Gotchas
 
-- **`.Result` and `.Wait()` are safe in ASP.NET Core but dangerous in ASP.NET Framework and UI apps.** ASP.NET Core has no `SynchronizationContext` by default, so sync-over-async won't deadlock there — but the code is still wrong to write because it blocks a thread pool thread under load, and it will deadlock the moment you run the same code in a context that does have one.
-- **`ConfigureAwait(false)` only helps if every `await` in the call chain uses it.** One missing `ConfigureAwait(false)` deep in a library recaptures the context and the deadlock risk returns. This is why library code must use it consistently, and application code generally doesn't need to bother.
-- **`lock` is not async-compatible.** You cannot `await` inside a `lock` block — the compiler blocks it. If you try to work around this with `Monitor.Enter`/`Monitor.Exit` manually, you introduce the risk of exceptions leaving the lock held. Use `SemaphoreSlim` with `WaitAsync` instead.
-- **Thread.Sleep inside a lock is a deadlock waiting to happen in tests.** It's common in integration tests to add sleeps to simulate timing — doing so while holding a lock holds it longer than intended and can trigger the circular-wait condition with other test threads.
-- **Visual Studio's parallel stacks window is the fastest way to diagnose a live deadlock.** Debug → Windows → Parallel Stacks. Look for two threads each blocked in a `Monitor.Enter` or `WaitOne` pointing at each other. In production, capture a memory dump and analyse with WinDbg `!dlk` or dotnet-dump.
+- **`await task.ConfigureAwait(false)` in library code prevents the common async deadlock** by not capturing the calling `SynchronizationContext` — the continuation resumes on any thread pool thread.
+- **ASP.NET Core has no `SynchronizationContext`** — `.Result` won't cause the classic async deadlock there. But it still blocks a thread pool thread unnecessarily.
+- **`lock` allows re-entry by the same thread** (re-entrant). `SemaphoreSlim(1,1)` does not — the same thread calling `WaitAsync` twice deadlocks itself.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand both the classic multi-lock deadlock and the async-specific sync-over-async variant — and how to prevent each.
+**What they're really testing:** Whether you can diagnose and fix the async deadlock — the most common production deadlock in .NET.
 
-**Common question form:** "Have you ever caused a deadlock? How did you find it?" or "Why does calling `.Result` on a `Task` sometimes deadlock?"
+**Common question forms:**
+- "What is a deadlock and how do you prevent one?"
+- "Why does `.Result` sometimes deadlock?"
 
-**The depth signal:** A junior describes the two-thread, two-lock textbook scenario. A senior explains the sync-over-async variant — naming `SynchronizationContext` as the mechanism, explaining why ASP.NET Framework and UI threads are affected but ASP.NET Core is not, why `ConfigureAwait(false)` must be applied at every level in library code to actually break the capture, and that `SemaphoreSlim.WaitAsync` is the correct replacement for `lock` whenever you need to await inside a critical section.
+**The depth signal:** A senior describes the `.Result`/`SynchronizationContext` deadlock mechanically — context thread blocked by `.Result`, continuation waiting for context thread — and prescribes "async all the way" as the fix.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/csharp-task-parallel-library.md]] — Most async deadlocks originate from misusing `Task`; understanding TPL is the prerequisite.
-- [[dotnet/csharp-cancellation-token.md]] — `SemaphoreSlim.WaitAsync` accepts a `CancellationToken`; without one, a deadlocked semaphore wait blocks forever with no escape.
-- [[dotnet/csharp-thread-synchronization.md]] — `Monitor`, `Mutex`, `ReaderWriterLockSlim` — the full set of locking primitives and their ordering rules.
-- [[dotnet/async-await-internals.md]] — `SynchronizationContext` capture is the root cause of sync-over-async deadlocks; understanding how `await` captures context makes the failure mode obvious.
+- [[dotnet/csharp/csharp-lock-mutex.md]] — Lock ordering is the primary tool for preventing lock-based deadlocks
+- [[dotnet/csharp/csharp-async-await.md]] — "Async all the way" is the fix for async/sync deadlocks
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/standard/threading/overview-of-synchronization-primitives](https://learn.microsoft.com/en-us/dotnet/standard/threading/overview-of-synchronization-primitives)
+[Deadlocks — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

@@ -4,132 +4,159 @@
 
 ---
 
+## Quick Reference
+
+| Type | Model | Use for |
+|---|---|---|
+| `ConcurrentDictionary<K,V>` | Striped hash table | Shared caches, counters |
+| `ConcurrentQueue<T>` | Lock-free FIFO | Producer/consumer queues |
+| `ConcurrentStack<T>` | Lock-free LIFO | Work-stealing, undo |
+| `ConcurrentBag<T>` | Thread-local LIFO | Object pools (same-thread produce+consume) |
+| `BlockingCollection<T>` | Bounded + blocking | Bounded producer/consumer |
+
+---
+
 ## When To Use It
 
-Use concurrent collections any time multiple threads need to share a collection — producer/consumer queues, caches shared across requests, aggregation from parallel work. They replace the pattern of wrapping a `List<T>` or `Dictionary<TKey,TValue>` in a `lock` block, which is correct but creates a single contention point. Do not use them when only one thread ever touches the collection — the overhead of thread-safe operations is unnecessary. Do not use them when you need atomic operations across multiple collections simultaneously — they protect individual operations, not multi-collection transactions.
+Use concurrent collections any time multiple threads need to share a collection. They replace the pattern of wrapping a `List<T>` or `Dictionary<K,V>` in a `lock` block — which is correct but creates a single contention point.
+
+**Don't use them when:**
+- Only one thread ever touches the collection — overhead is unnecessary
+- You need atomic operations across multiple collections simultaneously — they protect individual operations, not multi-collection transactions
 
 ---
 
 ## Core Concept
 
-The standard collections (`List<T>`, `Dictionary<TKey,TValue>`, `Queue<T>`) are not thread-safe. If two threads call `Add` at the same moment, internal state can corrupt. The naive fix is a `lock` around every access, which works but serialises every reader and writer through a single gate. The concurrent collections use finer-grained strategies: `ConcurrentDictionary` stripes its internal buckets so threads operating on different keys rarely contend; `ConcurrentQueue` and `ConcurrentStack` use lock-free compare-and-swap (CAS) operations backed by `Interlocked`; `BlockingCollection` wraps any concurrent collection and adds bounded capacity plus blocking `Take` — the foundation of the producer/consumer pattern. The trade-off is that compound operations ("check then act") are not atomic across separate method calls — the collection provides atomicity per call, not per workflow.
+Standard collections aren't thread-safe — concurrent `Add` calls can corrupt internal state. The naive fix is a `lock` around every access, which serialises all threads. Concurrent collections use finer-grained strategies: `ConcurrentDictionary` stripes its internal buckets so threads operating on different keys rarely contend; `ConcurrentQueue` and `ConcurrentStack` use lock-free compare-and-swap (CAS) operations.
+
+**Critical limitation:** Each *individual* method call is atomic, but compound operations ("check then act") are not. Two separate method calls can be interleaved by other threads between them.
 
 ---
 
 ## The Code
+
+**`ConcurrentDictionary`**
 ```csharp
-// --- ConcurrentDictionary: thread-safe key-value store ---
 var cache = new ConcurrentDictionary<string, string>();
 
-// GetOrAdd is atomic: only one thread runs the factory for a given key
+// GetOrAdd: atomic — factory only runs if key is absent
 string value = cache.GetOrAdd("user:1", key => LoadFromDb(key));
 
-// AddOrUpdate: atomically update an existing value or add new
+// AddOrUpdate: atomic read-modify-write
 cache.AddOrUpdate(
     key: "counter",
     addValue: "1",
     updateValueFactory: (key, existing) => (int.Parse(existing) + 1).ToString());
 
-// TryGetValue / TryRemove are the safe read/remove primitives
 if (cache.TryGetValue("user:1", out string? result))
     Console.WriteLine(result);
 
 cache.TryRemove("user:1", out _);
+```
 
-// --- ConcurrentQueue: lock-free FIFO ---
+**`ConcurrentQueue` — lock-free FIFO**
+```csharp
 var queue = new ConcurrentQueue<int>();
-
-// Producer threads
 Parallel.For(0, 10, i => queue.Enqueue(i));
-
-// Consumer threads
 while (queue.TryDequeue(out int item))
     Console.WriteLine(item);
+```
 
-// --- ConcurrentStack: lock-free LIFO ---
-var stack = new ConcurrentStack<string>();
-stack.Push("first");
-stack.Push("second");
-
-stack.TryPop(out string? top);      // "second"
-stack.TryPeek(out string? peeked);  // non-destructive read
-
-// PushRange / TryPopRange for batch operations (more efficient than one-by-one)
-stack.PushRange(new[] { "a", "b", "c" });
-string[] popped = new string[3];
-int count = stack.TryPopRange(popped); // returns number actually popped
-
-// --- BlockingCollection: bounded producer-consumer with backpressure ---
-// Default backing store is ConcurrentQueue
+**`BlockingCollection` — bounded producer/consumer**
+```csharp
 using var buffer = new BlockingCollection<string>(boundedCapacity: 100);
 
-// Producer (runs on its own thread)
 Task producer = Task.Run(() =>
 {
     foreach (string item in GetItems())
-    {
-        buffer.Add(item); // blocks if buffer is full (backpressure)
-    }
-    buffer.CompleteAdding(); // signals no more items coming
+        buffer.Add(item);          // blocks if full (backpressure)
+    buffer.CompleteAdding();       // signals no more items
 });
 
-// Consumer (runs on its own thread)
 Task consumer = Task.Run(() =>
 {
-    foreach (string item in buffer.GetConsumingEnumerable()) // blocks until item available
-    {
+    foreach (string item in buffer.GetConsumingEnumerable()) // blocks until available
         Process(item);
-    } // exits cleanly when CompleteAdding() is called and queue is drained
+    // exits cleanly when CompleteAdding() called and queue is drained
 });
 
 await Task.WhenAll(producer, consumer);
+```
 
-// --- ConcurrentBag: unordered, optimised for same-thread produce+consume ---
-// Good for object pools; poor for strict producer/consumer separation
-var bag = new ConcurrentBag<StringBuilder>();
-bag.Add(new StringBuilder());
+**`ConcurrentBag` — object pool pattern**
+```csharp
+var pool = new ConcurrentBag<StringBuilder>();
 
-if (!bag.TryTake(out StringBuilder? sb))
-    sb = new StringBuilder(); // create new if pool is empty
+StringBuilder GetBuilder()
+{
+    if (!pool.TryTake(out var sb))
+        sb = new StringBuilder();
+    return sb;
+}
 
-sb.Clear();
-bag.Add(sb); // return to pool
+void ReturnBuilder(StringBuilder sb) { sb.Clear(); pool.Add(sb); }
+```
+
+---
+
+## Real World Example
+
+A request-scoped counter tracks API usage without locks using `ConcurrentDictionary`.
+
+```csharp
+public class ApiUsageTracker
+{
+    private readonly ConcurrentDictionary<string, long> _counts = new();
+    private readonly ConcurrentDictionary<string, long> _bytes  = new();
+
+    public void RecordRequest(string apiKey, long bytesServed)
+    {
+        // AddOrUpdate is one atomic operation — no race between read and write
+        _counts.AddOrUpdate(apiKey, 1L, (_, c) => c + 1);
+        _bytes.AddOrUpdate(apiKey, bytesServed, (_, b) => b + bytesServed);
+    }
+
+    public (long Requests, long Bytes) GetUsage(string apiKey)
+        => (_counts.GetValueOrDefault(apiKey),
+            _bytes.GetValueOrDefault(apiKey));
+}
 ```
 
 ---
 
 ## Gotchas
 
-- **`GetOrAdd` on `ConcurrentDictionary` can call the factory more than once.** Under contention, two threads may both find the key missing and both invoke the factory. Only one result is stored, but the factory runs twice. If the factory has side effects (creating a DB connection, allocating a large object), this causes real problems. Wrap with `Lazy<T>` as the value type when the factory must run exactly once.
-- **Compound operations are not atomic.** `ContainsKey` followed by `TryGetValue` on `ConcurrentDictionary` is not thread-safe as a pair — another thread can remove the key between the two calls. Always use the single atomic methods: `TryGetValue`, `GetOrAdd`, `AddOrUpdate`, `TryRemove`. Never combine separate calls and assume the result is consistent.
-- **`ConcurrentBag<T>` performs poorly when producers and consumers are different threads.** It is optimised for a thread-local list per thread. When one thread produces and a different thread consumes, it degenerates into high contention. Use `ConcurrentQueue` for cross-thread producer/consumer and `ConcurrentBag` only for same-thread pooling scenarios.
-- **`BlockingCollection.Add` throws `InvalidOperationException` after `CompleteAdding` is called.** If a producer calls `Add` after the consumer has signalled completion — a race that can happen when shutdown ordering is wrong — the exception is thrown synchronously. Wrap `Add` in a `try/catch` for `InvalidOperationException` or check `IsAddingCompleted` first in shutdown-sensitive paths.
-- **Enumerating concurrent collections gives a snapshot, not a live view.** Iterating a `ConcurrentDictionary` with `foreach` is safe but reflects the state at an unspecified point in time — items added or removed during the iteration may or may not appear. Never rely on enumeration for correctness in concurrent code; use it only for diagnostics or logging.
+- **`GetOrAdd` factory can run more than once.** Under contention, two threads may both find the key missing and both invoke the factory. Only one result is stored, but the factory runs twice. Wrap with `Lazy<T>` as the value type when the factory must run exactly once.
+- **Compound operations are not atomic.** `ContainsKey` followed by `TryGetValue` is not safe as a pair — another thread can remove the key between them. Always use the single atomic methods: `TryGetValue`, `GetOrAdd`, `AddOrUpdate`, `TryRemove`.
+- **`ConcurrentBag` degrades with cross-thread produce/consume.** It's optimised for same-thread scenarios. For cross-thread producer/consumer, use `ConcurrentQueue`.
+- **`BlockingCollection.Add` throws after `CompleteAdding`.** Wrap in try/catch for `InvalidOperationException` in shutdown-sensitive paths.
+- **Enumeration gives a snapshot, not a live view.** Safe to iterate but reflects state at an unspecified point in time — items added/removed during iteration may or may not appear.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand why thread-safe collections exist at a mechanical level — not just "use `ConcurrentDictionary` instead of `Dictionary`" — and where their guarantees end.
+**What they're really testing:** Whether you understand why thread-safe collections exist and where their guarantees end.
 
-**Common question form:** "How would you share a cache across multiple threads?" or "What's wrong with locking a `Dictionary` yourself?"
+**Common question forms:**
+- "How would you share a cache across multiple threads?"
+- "What's wrong with locking a `Dictionary` yourself?"
 
-**The depth signal:** A junior says "use `ConcurrentDictionary` because it's thread-safe." A senior explains that `ConcurrentDictionary` uses bucket-level striping to reduce contention vs a single `lock`, names the `GetOrAdd`-factory-runs-twice problem and the `Lazy<T>` fix, distinguishes per-call atomicity from compound-operation atomicity, and knows that `BlockingCollection` with `CompleteAdding`/`GetConsumingEnumerable` is the canonical producer/consumer pattern — including that omitting `CompleteAdding` leaves the consumer blocked forever.
+**The depth signal:** A senior explains bucket-level striping, names the `GetOrAdd`-factory-runs-twice problem and the `Lazy<T>` fix, and distinguishes per-call atomicity from compound-operation atomicity.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/csharp-lock-mutex.md]] — Concurrent collections eliminate the need for manual locking in most cases; knowing both shows when each is appropriate.
-- [[dotnet/csharp-task-parallel-library.md]] — Parallel work almost always needs a thread-safe way to collect results; `ConcurrentBag` and `ConcurrentQueue` are the natural pairing with `Parallel.For` and `Task.WhenAll`.
-- [[dotnet/csharp-channels.md]] — `Channel<T>` is the modern, async-native evolution of `BlockingCollection`; prefer it for new producer/consumer code where consumers need to `await` items.
-- [[dotnet/csharp-deadlocks.md]] — Removing explicit locks with concurrent collections is one of the cleanest ways to eliminate lock-ordering deadlocks entirely.
+- [[dotnet/csharp/csharp-lock-mutex.md]] — When manual locking is still needed
+- [[dotnet/csharp/csharp-channels.md]] — `Channel<T>` for async-native producer/consumer
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/](https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/)
+[Thread-Safe Collections — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

@@ -1,145 +1,201 @@
-# C# — Span<T> and Memory<T>
+# C# Span\<T\> and Memory\<T\>
 
-> Stack-allocated views over contiguous memory — a way to slice and read arrays, strings, and buffers without copying anything or allocating on the heap.
+> `Span<T>` is a stack-only, zero-allocation window into a contiguous region of memory — an array slice, a string segment, or a stack-allocated buffer — without copying. `Memory<T>` is the heap-safe version for async contexts.
+
+---
+
+## Quick Reference
+
+| | `Span<T>` | `Memory<T>` |
+|---|---|---|
+| **Backing** | Array, stack, unmanaged | Array, string (via `AsMemory()`) |
+| **Storage** | Stack only (`ref struct`) | Heap-safe (regular struct) |
+| **Async** | ❌ Cannot survive `await` | ✅ Can survive `await` |
+| **Allocation** | Zero | Zero (wrapper struct) |
+| **Convert** | `.AsSpan()` | `.AsMemory()` |
+| **C# version** | C# 7.2 / .NET Core 2.1 | C# 7.2 / .NET Core 2.1 |
 
 ---
 
 ## When To Use It
 
-Use `Span<T>` when you need to work with a slice of an array, string, or stack-allocated buffer in a hot path where allocations matter — parsers, serializers, binary protocol handlers, and anything processing large byte streams. Use `Memory<T>` when you need the same thing but across `async` boundaries, since `Span<T>` can't be stored on the heap or used in async methods. Don't reach for either in ordinary business logic — the complexity cost isn't worth it unless you've profiled and confirmed that allocations are the bottleneck.
+Use `Span<T>` / `ReadOnlySpan<T>` whenever you need to process a sub-region of an array or string **without allocating a copy**. Canonical use cases: parsing protocols/CSV/JSON, slice-and-process without heap pressure, passing sub-arrays into methods that accept `ReadOnlySpan<byte>`.
+
+Use `Memory<T>` when the slice needs to survive an `await` — `Span<T>` is a `ref struct` and cannot be stored on the heap (which the async state machine requires). Switch to `Memory<T>` at `async` boundaries, then call `.Span` inside synchronous sections.
 
 ---
 
 ## Core Concept
 
-Normally, when you take a substring or a slice of an array, C# allocates a new object on the heap and copies the data into it. `Span<T>` avoids that entirely — it's just a pointer and a length, stored on the stack, pointing into whatever memory already exists. You can slice a `Span<T>` ten times and never allocate. The constraint that makes this safe is that `Span<T>` is a `ref struct` — the compiler forbids it from ever leaving the stack, which means no heap allocation, no GC pressure, but also no storing it in a field, no boxing it, and no using it in async methods. `Memory<T>` is the heap-safe wrapper that trades the stack restriction for async compatibility — it can be stored in fields and awaited, but it costs slightly more to convert back to a `Span<T>` when you need to actually read/write the data.
+A `Span<T>` is a **ref struct** — a struct that can only live on the stack. It contains a pointer to the start of a memory region and a length. Creating one against an array, string, or `stackalloc` buffer costs nothing — no new object, no copy. Reading or writing through it accesses the underlying memory directly.
+
+Because it must stay on the stack, `Span<T>` cannot:
+- Be stored in a class field
+- Be captured in a lambda
+- Cross an `async`/`await` boundary
+- Be boxed
+
+`Memory<T>` lifts these restrictions by storing an object reference + offset + length instead of a raw pointer, at the cost of the `ref struct` guarantee. Access the `Span<T>` inside it via `.Span` property.
 
 ---
 
 ## The Code
 
-### Span<T> — slice without allocating
+**Creating spans from different sources**
 ```csharp
-byte[] buffer = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+// From array
+int[] array = { 1, 2, 3, 4, 5 };
+Span<int> full   = array.AsSpan();
+Span<int> slice  = array.AsSpan(1, 3);  // { 2, 3, 4 } — no copy
+// Or: Span<int> slice = array.AsSpan()[1..4];
 
-Span<byte> full = buffer;          // no allocation — just a view
-Span<byte> slice = full.Slice(2, 4); // bytes 3,4,5,6 — still no allocation
+// From string
+string text = "Hello, World!";
+ReadOnlySpan<char> word = text.AsSpan(0, 5); // "Hello" — no copy
 
-slice[0] = 99; // writes directly into the original buffer
-Console.WriteLine(buffer[2]); // 99 — same memory
+// Stack allocation — never touches heap
+Span<byte> buffer = stackalloc byte[256];
+buffer.Fill(0);
 ```
 
-### Parsing without allocating a substring
+**Zero-allocation parsing**
 ```csharp
-// Old way — allocates a new string for each Split segment
-string csv = "alice,bob,charlie";
-string[] parts = csv.Split(','); // 3 heap allocations
-
-// Span way — zero allocations
-ReadOnlySpan<char> span = csv.AsSpan();
-
-while (true)
+// Parse CSV row without allocating substrings
+static void ParseRow(ReadOnlySpan<char> row)
 {
-    int comma = span.IndexOf(',');
-    ReadOnlySpan<char> segment = comma == -1 ? span : span[..comma];
+    while (row.Length > 0)
+    {
+        int comma = row.IndexOf(',');
+        ReadOnlySpan<char> field = comma >= 0 ? row[..comma] : row;
 
-    Console.WriteLine(segment.ToString()); // ToString only when actually needed
-    
-    if (comma == -1) break;
-    span = span[(comma + 1)..];
+        // MemoryExtensions.TryParse — parse directly from span, no substring
+        if (int.TryParse(field, out int value))
+            Console.WriteLine($"int: {value}");
+        else
+            Console.WriteLine($"text: {field.ToString()}"); // allocate only for display
+
+        if (comma < 0) break;
+        row = row[(comma + 1)..];
+    }
+}
+
+ParseRow("42,hello,99,world".AsSpan()); // zero allocations in the loop
+```
+
+**Span is a live view — mutations affect the original**
+```csharp
+int[] data = { 1, 2, 3, 4, 5 };
+Span<int> mid = data.AsSpan(1, 3); // { 2, 3, 4 }
+mid[0] = 99;
+Console.WriteLine(data[1]); // 99 — Span and array share memory
+```
+
+**Crossing async boundaries — use Memory\<T\>**
+```csharp
+// WRONG: Span<T> can't survive await
+async Task ProcessAsync(Span<byte> data, CancellationToken ct)
+{
+    await Task.Delay(1, ct); // compile error: cannot use Span<T> in async
+}
+
+// CORRECT: Memory<T> across await; slice to Span<T> inside sync sections
+async Task ProcessAsync(Memory<byte> data, CancellationToken ct)
+{
+    await Task.Delay(1, ct); // fine — Memory<T> is a regular struct
+
+    ReadOnlySpan<byte> sync = data.Span; // back to Span<T> for sync processing
+    Console.WriteLine(sync.Length);
 }
 ```
 
-### stackalloc — allocate on the stack entirely
+**`stackalloc` with Span — zero-heap buffer**
 ```csharp
-// No heap allocation at all — buffer lives on the stack
-Span<byte> stackBuffer = stackalloc byte[256];
-
-for (int i = 0; i < stackBuffer.Length; i++)
-    stackBuffer[i] = (byte)i;
-
-// Safe to pass to any method that accepts Span<byte>
-ProcessBuffer(stackBuffer);
-
-void ProcessBuffer(Span<byte> data) =>
-    Console.WriteLine($"First byte: {data[0]}, Length: {data.Length}");
-```
-
-### Memory<T> — when you need to cross async boundaries
-```csharp
-class DataProcessor
+void EncodeSmallMessage(ReadOnlySpan<byte> payload, Span<byte> output)
 {
-    // Memory<T> can live in a field; Span<T> cannot
-    private readonly Memory<byte> _buffer;
-
-    public DataProcessor(byte[] data)
-    {
-        _buffer = data.AsMemory();
-    }
-
-    public async Task ProcessAsync()
-    {
-        // Convert to Span only when doing synchronous work
-        Span<byte> span = _buffer.Span;
-        span[0] = 0xFF;
-
-        await Task.Delay(10); // can await freely; Memory<T> survives this
-
-        // Can slice Memory<T> same as Span<T>
-        Memory<byte> slice = _buffer.Slice(1, 4);
-        await WriteAsync(slice);
-    }
-
-    private Task WriteAsync(Memory<byte> data) => Task.CompletedTask;
+    Span<byte> header = stackalloc byte[4]; // stack — no GC
+    System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header, payload.Length);
+    header.CopyTo(output);
+    payload.CopyTo(output[4..]);
 }
 ```
 
-### MemoryMarshal — interop and reinterpretation
+---
+
+## Real World Example
+
+A binary frame reader parses protocol headers directly from a network buffer using `ReadOnlySpan<byte>` — zero intermediate allocations per frame on a high-throughput socket server.
+
 ```csharp
-byte[] raw = new byte[8];
-// Reinterpret the byte array as a span of longs — zero copy, zero allocation
-Span<long> longs = MemoryMarshal.Cast<byte, long>(raw);
+public readonly ref struct ParsedFrame
+{
+    public ushort CommandId { get; init; }
+    public ushort Flags     { get; init; }
+    public ReadOnlySpan<byte> Payload { get; init; }
+}
 
-longs[0] = 0x0102030405060708L;
+public static bool TryParseFrame(ReadOnlySpan<byte> buffer, out ParsedFrame frame)
+{
+    frame = default;
+    if (buffer.Length < 8) return false;
 
-// raw now contains the bytes of that long value
-Console.WriteLine(raw[0]); // endian-dependent byte value
+    ushort magic = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(buffer[..2]);
+    if (magic != 0xFACE) return false;
+
+    ushort commandId     = BinaryPrimitives.ReadUInt16BigEndian(buffer[2..4]);
+    ushort flags         = BinaryPrimitives.ReadUInt16BigEndian(buffer[4..6]);
+    ushort payloadLength = BinaryPrimitives.ReadUInt16BigEndian(buffer[6..8]);
+
+    if (buffer.Length < 8 + payloadLength) return false;
+
+    frame = new ParsedFrame
+    {
+        CommandId = commandId,
+        Flags     = flags,
+        Payload   = buffer.Slice(8, payloadLength)
+    };
+    return true;
+}
 ```
+
+*The `ParsedFrame` is itself a `ref struct`, meaning it can contain a `ReadOnlySpan<byte>` field. At 100,000 frames/second, zero heap allocations per parse keeps GC pauses out of the critical path.*
 
 ---
 
 ## Gotchas
 
-- **`Span<T>` cannot be used in async methods at all** — the compiler error ("cannot use ref struct in async method") means you have to convert to `Memory<T>` before the async boundary and convert back to `Span<T>` inside the synchronous segments. Trying to work around this with `Task.Run` or casting will not work.
-- **`stackalloc` over ~1KB risks stack overflow** — the stack is limited (typically 1MB on .NET). For anything larger or of unknown size, use a heap-allocated array or `ArrayPool<T>` instead. A common pattern is `stackalloc` for small sizes, `ArrayPool` for large ones, guarded by a size check.
-- **Slicing does not copy — writes affect the original** — this is the point, but it surprises people. If you hand a `Span<T>` slice to a method, that method can mutate your original buffer. Use `ReadOnlySpan<T>` to prevent this.
-- **`Span<T>` cannot be stored in a class field** — because it's a `ref struct`, the compiler will reject any attempt to put it in a field, capture it in a lambda, or store it in a generic type. If you hit this, `Memory<T>` is always the answer.
-- **`string.AsSpan()` returns `ReadOnlySpan<char>`, not `Span<char>`** — strings are immutable in .NET, so you can never get a writable `Span<char>` from a `string`. If you need to mutate characters in place, you need a `char[]` or use `stackalloc char[n]` to build it yourself.
+- **`Span<T>` cannot be stored in a field or captured in a lambda.** It's a `ref struct` — stack only. The compiler enforces this.
+- **`Span<T>` cannot survive `await`.** Async state machines are heap classes that store locals as fields. Use `Memory<T>` as the parameter type across async boundaries.
+- **Mutations through `Span<T>` affect the original.** A `Span<T>` is a view, not a copy. `span[0] = 99` writes to the original array.
+- **`stackalloc` inside a loop allocates per iteration.** Move it outside the loop or use a fixed-size inline array (`[InlineArray]` in .NET 8).
+- **`Memory<T>.Span` has a cost.** Each call to `.Span` on a non-array `Memory<T>` does work. Cache the span in a local if you call it multiple times in a tight loop.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand memory layout, heap vs stack allocation, and how .NET's GC creates performance pressure — not just that `Span<T>` is "faster."
+**What they're really testing:** Whether you understand the stack-only constraint, why it exists, and when to use `Memory<T>` vs `Span<T>`.
 
-**Common question form:** "How would you parse a large file/stream without excessive allocations?" or "What's the difference between `Span<T>` and `Memory<T>`?" or "What is a `ref struct` and why does it matter?"
+**Common question forms:**
+- "What is `Span<T>` and when would you use it?"
+- "Why can't you use `Span<T>` in an async method?"
+- "What's the difference between `Span<T>` and `Memory<T>`?"
 
-**The depth signal:** A junior says `Span<T>` avoids copies and is faster than substring. A senior explains *why*: that heap allocations aren't free because they pressure the GC, that `Span<T>` is a `ref struct` which means the CLR can enforce stack-only lifetime without a GC handle, and that `Memory<T>` exists precisely because `async` state machines are compiler-generated classes that store locals as fields — which is why a `ref struct` can't survive an `await`. The senior also knows `ArrayPool<T>` as the companion pattern for when `stackalloc` sizes are too large or dynamic.
+**The depth signal:** A senior explains `ref struct` — the stack-only constraint exists because the async state machine is a heap-allocated class that would need to store the span as a field, which violates the `ref struct` rule. They know `Memory<T>` stores an object reference + offset instead of a raw pointer, enabling heap storage. They reach for `ReadOnlySpan<char>` for string parsing to avoid intermediate substring allocations.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/csharp-arraypool.md]] — `ArrayPool<T>` is the companion to `Span<T>` for heap-allocated buffers that need to be rented and returned rather than GC'd; used together in high-throughput code.
-- [[dotnet/csharp-ref-struct.md]] — `Span<T>` is a `ref struct`; understanding what that constraint means explains every limitation `Span<T>` has.
-- [[dotnet/csharp-ienumerable.md]] — Contrasts with `IEnumerable<T>`'s heap-based, GC-pressuring iteration model; clarifies when to reach for each.
-- [[dotnet/csharp-unsafe-pointers.md]] — `Span<T>` is the safe alternative to raw pointer arithmetic; understanding both shows where the boundary between safe and unsafe performance code sits.
+- [[dotnet/csharp/csharp-arrays.md]] — `Span<T>` is most commonly backed by arrays
+- [[dotnet/csharp/csharp-strings.md]] — `ReadOnlySpan<char>` slices strings without allocation
+- [[dotnet/csharp/csharp-stackalloc.md]] — Stack allocation creates the buffer that `Span<T>` wraps
+- [[dotnet/csharp/csharp-async-await.md]] — The async boundary that forces `Span<T>` → `Memory<T>` switch
 
 ---
 
 ## Source
 
-https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines
+[Memory and Span — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

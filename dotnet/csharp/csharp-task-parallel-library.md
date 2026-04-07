@@ -1,104 +1,167 @@
 # C# Task Parallel Library (TPL)
 
-> The TPL is .NET's built-in framework for writing concurrent and parallel code using tasks, thread pools, and async/await — without manually managing threads.
+> The set of types and methods — primarily `Task`, `Task<T>`, `Parallel`, and `Task.WhenAll/WhenAny` — that represent asynchronous and parallel operations and compose them.
+
+---
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Core type** | `Task` (void), `Task<T>` (returns value) |
+| **CPU parallel** | `Parallel.For`, `Parallel.ForEach`, `Parallel.ForEachAsync` |
+| **Task combinators** | `Task.WhenAll`, `Task.WhenAny`, `Task.WaitAll` (blocking) |
+| **Thread pool offload** | `Task.Run(Func<T>)` |
+| **C# version** | .NET 4.0 (TPL), C# 5.0 (async/await integration) |
 
 ---
 
 ## When To Use It
 
-Use TPL whenever you need to do more than one thing at a time: running CPU-heavy computations in parallel, firing multiple I/O calls without blocking, or keeping a UI responsive during background work. The three main entry points are `Task.Run` for CPU-bound work, `async`/`await` for I/O-bound work, and `Parallel.For`/`Parallel.ForEach` for data parallelism.
-
-Do not use `Task.Run` to wrap inherently async APIs — that's unnecessary overhead. Do not use `Parallel.For` when work items are I/O-bound; you'll exhaust the thread pool without gaining throughput.
+- **`Task.Run`**: Move CPU-intensive synchronous work off the calling thread to a thread pool thread — image processing, crypto, compression, heavy computation.
+- **`Task.WhenAll`**: Fire multiple independent async operations concurrently and wait for all to finish.
+- **`Task.WhenAny`**: Race multiple operations and act on whichever completes first — timeouts, fallback providers.
+- **`Parallel.ForEach`**: Process a collection's elements in parallel across CPU cores for CPU-bound work. Not for async/await — use `Parallel.ForEachAsync` for that.
 
 ---
 
 ## Core Concept
 
-A `Task` is a promise that some work will complete in the future. The TPL manages a shared thread pool and decides which thread actually runs each task — you don't pick threads yourself. When you `await` a task, the current thread is released back to the pool instead of sitting idle. When the result arrives, the continuation picks up any available thread and resumes. This is why async code scales better than spinning up a thread per request: threads are expensive, and awaiting lets the pool reuse them for other work while waiting on I/O.
+`Task` represents a unit of work that may be pending, running, completed, or faulted. It's the return type for all async methods. You compose tasks with combinators:
+
+- `WhenAll(tasks)`: complete when all tasks complete, aggregate all exceptions
+- `WhenAny(tasks)`: complete when the first task completes — the others continue running
+- `WhenAll` catches all exceptions; `await`ing a faulted `WhenAll` throws only the first (others in `task.Exception.InnerExceptions`)
+
+`Parallel.ForEach` partitions the source collection across threads. It's synchronous (blocks until all work completes) and for CPU work only — using async delegates inside `Parallel.ForEach` leads to ignored tasks and wasted threads.
 
 ---
 
 ## The Code
+
+**`Task.Run` — offload CPU work**
 ```csharp
-// --- CPU-bound: offload heavy computation to thread pool ---
-int result = await Task.Run(() =>
+// CPU-bound: run on thread pool thread, don't block UI/request thread
+public async Task<byte[]> CompressAsync(byte[] data, CancellationToken ct)
 {
-    return Enumerable.Range(1, 10_000_000).Sum(); // heavy work
-});
+    return await Task.Run(() =>
+    {
+        using var ms = new MemoryStream();
+        using var gz = new GZipStream(ms, CompressionLevel.Optimal);
+        gz.Write(data);
+        gz.Flush();
+        return ms.ToArray();
+    }, ct);
+}
+```
 
-// --- I/O-bound: async without holding a thread ---
-using HttpClient client = new();
-string html = await client.GetStringAsync("https://example.com");
-// Thread is free while waiting for the HTTP response
+**`Task.WhenAll` — concurrent async operations**
+```csharp
+// Sequential: total time = t1 + t2 + t3
+var a = await FetchAAsync(ct);
+var b = await FetchBAsync(ct);
+var c = await FetchCAsync(ct);
 
-// --- Fan-out: run multiple tasks concurrently, collect results ---
-Task<int> t1 = FetchCountAsync("orders");
-Task<int> t2 = FetchCountAsync("users");
-Task<int> t3 = FetchCountAsync("products");
+// Concurrent: total time = max(t1, t2, t3)
+var taskA = FetchAAsync(ct);
+var taskB = FetchBAsync(ct);
+var taskC = FetchCAsync(ct);
+await Task.WhenAll(taskA, taskB, taskC);
+string a = taskA.Result; string b = taskB.Result; string c = taskC.Result;
+```
 
-int[] counts = await Task.WhenAll(t1, t2, t3); // all run in parallel
+**`Task.WhenAny` — timeout and race patterns**
+```csharp
+// Timeout pattern
+using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+cts.CancelAfter(TimeSpan.FromSeconds(5));
 
-// --- Data parallelism: partition a collection across cores ---
-int total = 0;
-object lockObj = new();
+Task<string> workTask    = DoWorkAsync(cts.Token);
+Task timeoutTask         = Task.Delay(Timeout.Infinite, cts.Token);
 
-Parallel.ForEach(largeList, item =>
-{
-    int val = ExpensiveCompute(item);
-    lock (lockObj) total += val; // shared state needs explicit sync
-});
+Task completed = await Task.WhenAny(workTask, timeoutTask);
+if (completed == workTask)
+    return workTask.Result;
+throw new TimeoutException("Operation timed out");
 
-// --- Cancellation: clean way to stop a long-running task ---
-var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+// Fallback provider race — use whichever is fastest
+Task<string> primary   = primaryProvider.GetAsync(key, ct);
+Task<string> secondary = secondaryProvider.GetAsync(key, ct);
+Task<string> winner    = (Task<string>)await Task.WhenAny(primary, secondary);
+return await winner;
+```
+
+**`Parallel.ForEach` — CPU-parallel collection processing**
+```csharp
+// Good for CPU-bound: image resizing, encryption, compression
+Parallel.ForEach(
+    images,
+    new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct },
+    image => ResizeImage(image, 800, 600));
+
+// .NET 6+: async-capable parallel foreach
+await Parallel.ForEachAsync(
+    imageUrls,
+    new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = ct },
+    async (url, cancel) => await DownloadAndSaveAsync(url, cancel));
+```
+
+**Handling `WhenAll` exceptions**
+```csharp
 try
 {
-    string data = await FetchDataAsync(cts.Token);
+    await Task.WhenAll(taskA, taskB, taskC);
 }
-catch (OperationCanceledException)
+catch (Exception)
 {
-    Console.WriteLine("Timed out after 5s");
-}
+    // await only re-throws the FIRST exception
+    // Inspect ALL exceptions:
+    var allErrors = new[] { taskA, taskB, taskC }
+        .Where(t => t.IsFaulted)
+        .SelectMany(t => t.Exception!.InnerExceptions)
+        .ToList();
 
-// --- Continuation: chain work after a task completes ---
-Task<string> pipeline = GetDataAsync()
-    .ContinueWith(t => Process(t.Result),   TaskContinuationOptions.OnlyOnRanToCompletion)
-    .ContinueWith(t => Save(t.Result),      TaskContinuationOptions.OnlyOnRanToCompletion);
+    foreach (var ex in allErrors)
+        logger.LogError(ex, "Task failed");
+    throw;
+}
 ```
 
 ---
 
 ## Gotchas
 
-- **`Task.Run` inside an async method is almost always wrong for I/O.** If you're wrapping `await SomeAsyncMethod()` in `Task.Run`, you're burning a thread pool thread for nothing. `Task.Run` is only justified when the work is genuinely CPU-bound.
-- **`async void` swallows exceptions.** Use it only for event handlers where the signature is forced. Everywhere else, return `Task`. An exception thrown inside `async void` crashes the process without a chance to catch it.
-- **`.Result` and `.Wait()` cause deadlocks in ASP.NET Framework and Blazor WASM.** These sync-over-async calls block the current thread while waiting for a task that needs that same thread to complete. Always `await` instead.
-- **`Parallel.ForEach` doesn't play well with async.** You can't `await` inside the loop body — it silently returns a `Task` and moves on. Use `Task.WhenAll` with `Select` for async fan-out over a collection.
-- **`CancellationToken` needs to be threaded all the way down.** Passing a token to the top-level call does nothing if the inner methods don't accept and check it. Every layer in the call stack needs to forward it explicitly.
+- **`Task.WhenAll` awaiting only re-throws the first exception.** Inspect `.Exception.InnerExceptions` on faulted tasks to see all failures.
+- **`Parallel.ForEach` with async delegates doesn't work.** `Parallel.ForEach(items, async item => await ...)` — the lambda returns `Task` which Parallel treats as `object` and ignores. Use `Parallel.ForEachAsync` (.NET 6+) or `Task.WhenAll`.
+- **`Task.Run` in ASP.NET Core is usually wrong.** ASP.NET Core already uses thread pool threads. Adding `Task.Run` context-switches for no benefit. Use it only for genuinely CPU-bound work.
+- **Unbounded concurrency can exhaust resources.** `Task.WhenAll(orders.Select(o => ProcessAsync(o, ct)))` with 10,000 orders fires 10,000 simultaneous DB/HTTP requests. Use `SemaphoreSlim` or `Parallel.ForEachAsync` with `MaxDegreeOfParallelism` to throttle.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand the difference between concurrency models — threads vs tasks vs async — and when each applies.
+**What they're really testing:** Whether you understand when to use `Task.Run` vs `async`/`await` directly, and `WhenAll` vs sequential awaits.
 
-**Common question form:** "What's the difference between `Task.Run` and `async`/`await`?" or "How would you run 50 API calls concurrently without killing the server?"
+**Common question forms:**
+- "How do you run multiple async operations concurrently?"
+- "When would you use `Task.Run`?"
+- "What's the difference between `WhenAll` and `WaitAll`?"
 
-**The depth signal:** A junior says "they're both for async code." A senior distinguishes thread-pool offload (CPU-bound, `Task.Run`) from non-blocking I/O (`await` with no extra thread), explains that `Task.WhenAll` gives you fan-out with back-pressure control, and mentions `SemaphoreSlim` to cap concurrency when hammering external APIs — because unbounded `Task.WhenAll` over 50k items will still kill you by exhausting sockets or rate limits, not threads.
+**The depth signal:** A senior knows `WhenAll` is async (non-blocking), `WaitAll` is synchronous (blocks the thread), `Task.Run` is for CPU work (not I/O), and that `Parallel.ForEach` with async delegates silently ignores all the returned tasks.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/async-await-internals.md]] — How the state machine generated by `async`/`await` works under the hood; pairs directly with TPL since `await` just unwraps a `Task`.
-- [[dotnet/cancellationtoken-patterns.md]] — Proper propagation and cooperative cancellation, which is the production-safe way to cancel TPL work.
-- [[dotnet/thread-synchronization.md]] — Mutexes, `SemaphoreSlim`, `Interlocked` — needed the moment you share state across `Parallel.For` or concurrent tasks.
-- [[algorithms/producer-consumer-queue.md]] — `Channel<T>` and `BlockingCollection<T>` sit on top of TPL and solve the bounded-concurrency pattern properly.
+- [[dotnet/csharp/csharp-async-await.md]] — async/await is built on `Task`
+- [[dotnet/csharp/csharp-cancellation-token.md]] — Cancellation flows through all TPL operations
+- [[dotnet/csharp/csharp-channels.md]] — Pipelines for controlled async producer/consumer patterns
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-parallel-library-tpl](https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-parallel-library-tpl)
+[Task Parallel Library — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-parallel-library-tpl)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

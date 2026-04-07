@@ -1,101 +1,120 @@
 # C# ValueTask
 
-> A struct-based alternative to `Task<T>` that avoids a heap allocation when an async method can return synchronously most of the time.
+> A struct-based alternative to `Task<T>` that avoids the heap allocation when an async method completes synchronously — important for hot-path methods that usually return a cached result.
+
+---
+
+## Quick Reference
+
+| | `Task<T>` | `ValueTask<T>` |
+|---|---|---|
+| **Type** | Reference type (class) | Value type (struct) |
+| **Allocation** | Always 1 heap alloc | 0 if completes synchronously |
+| **Can be awaited** | ✅ | ✅ |
+| **Can be awaited twice** | ✅ | ❌ — undefined behaviour |
+| **Use when** | General async | Hot path, often sync result |
+| **C# version** | .NET 4.5 | .NET Core 2.0 / C# 7.0 |
 
 ---
 
 ## When To Use It
 
-Use `ValueTask<T>` when a method is async by signature but frequently completes synchronously — cache lookups, buffer reads when data is already available, hot-path operations called millions of times per second. The allocation savings matter at scale.
+Use `ValueTask<T>` when:
+1. The method **frequently completes synchronously** (cache hit, value already available)
+2. The method is called at **very high frequency** (millions of times/second)
 
-Do not use it as a general replacement for `Task<T>`. If the result is almost always truly async, `Task<T>` is cheaper overall because the runtime caches common `Task<bool>` and `Task<int>` results and you lose that with `ValueTask`. Never store a `ValueTask` in a field or await it more than once — it is a single-use, consume-immediately type.
+Both conditions should hold. For a method that sometimes completes synchronously, `Task<T>` is fine — the allocation cost is negligible for occasional calls. `ValueTask` exists for the specific scenario where you measure allocation pressure from `Task` in a hot path.
 
 ---
 
 ## Core Concept
 
-Every `Task<T>` is a heap-allocated object. In hot paths — think a cache that hits 99% of the time — allocating a new `Task<bool>` for every call that returns `true` is pure GC pressure with no benefit. `ValueTask<T>` is a struct that can hold either a plain `T` (the synchronous result) or a reference to a real `Task<T>` (the async case). When the method completes synchronously, no heap object is created at all. When it actually has to go async, it falls back to a regular `Task<T>` under the hood. The trade-off is that `ValueTask` comes with usage constraints that `Task` doesn't have.
+A `Task<T>` is always a heap-allocated object — even for `return Task.FromResult(value)` in most scenarios. `ValueTask<T>` is a struct: when the operation completes synchronously, it wraps the result value directly with no heap allocation. When it must truly go async (suspends), it internally allocates a task-like object — same cost as `Task<T>`.
+
+The critical constraint: **await a `ValueTask<T>` at most once**. Unlike `Task<T>`, a `ValueTask<T>` may internally share state with a pooled object that gets recycled after one await. Awaiting it twice, or storing it and awaiting later, produces undefined behaviour. Convert with `.AsTask()` if you need to await multiple times or store it.
 
 ---
 
 ## The Code
+
+**Returning `ValueTask<T>` from a cache-first method**
 ```csharp
-// --- Typical pattern: sync fast-path, async slow-path ---
-private Dictionary<string, string> _cache = new();
+private readonly ConcurrentDictionary<int, User> _cache = new();
 
-public ValueTask<string> GetAsync(string key, CancellationToken ct = default)
+// Returns cached value without any heap allocation in the hot (cache-hit) path
+public ValueTask<User?> GetUserAsync(int id, CancellationToken ct = default)
 {
-    if (_cache.TryGetValue(key, out string? cached))
-        return new ValueTask<string>(cached); // no allocation
+    if (_cache.TryGetValue(id, out User? cached))
+        return ValueTask.FromResult(cached); // zero allocation — synchronous path
 
-    return new ValueTask<string>(FetchFromDbAsync(key, ct)); // wraps a real Task
+    return new ValueTask<User?>(LoadFromDbAsync(id, ct)); // async path — allocates
 }
 
-private async Task<string> FetchFromDbAsync(string key, CancellationToken ct)
+private async Task<User?> LoadFromDbAsync(int id, CancellationToken ct)
 {
-    await Task.Delay(50, ct); // simulate I/O
-    string value = $"value:{key}";
-    _cache[key] = value;
-    return value;
+    var user = await dbContext.Users.FindAsync(new object[] { id }, ct);
+    if (user is not null) _cache[id] = user;
+    return user;
 }
+```
 
-// --- Awaiting: identical syntax to Task ---
-string result = await GetAsync("user:42");
-
-// --- IValueTaskSource: advanced pool-based pattern (avoids even the Task fallback) ---
-// Used by System.IO.Pipelines and System.Net.Sockets internally.
-// Only implement this if you're writing infrastructure-level code.
-public ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+**Interface implementations**
+```csharp
+// Many BCL interfaces now use ValueTask for hot-path implementations
+public interface IOrderCache
 {
-    if (_pipe.TryRead(out int bytesRead))
-        return new ValueTask<int>(bytesRead);
-
-    return new ValueTask<int>(_source, _source.Version); // reusable source
+    ValueTask<Order?> GetAsync(Guid id, CancellationToken ct);
+    ValueTask SetAsync(Order order, CancellationToken ct);
 }
+```
 
-// --- What NOT to do ---
-ValueTask<string> vt = GetAsync("user:42");
-string a = await vt;
-string b = await vt; // ILLEGAL: ValueTask may already be consumed/returned to pool
+**Converting for multiple-await scenarios**
+```csharp
+ValueTask<string> vt = GetValueAsync();
 
-// Also illegal: storing and awaiting later
-_storedTask = GetAsync("user:42"); // don't do this
+// WRONG: awaiting twice — undefined behaviour
+await vt;
+await vt; // don't do this
+
+// CORRECT: convert to Task<T> first if you need multiple awaits
+Task<string> task = vt.AsTask();
+string result1 = await task;
+string result2 = await task; // fine — Task can be awaited multiple times
 ```
 
 ---
 
 ## Gotchas
 
-- **Awaiting a `ValueTask` twice is undefined behaviour.** If the underlying implementation uses `IValueTaskSource` (like `System.IO.Pipelines` does), the source may have been recycled and returned to a pool by the time you await it a second time. You get corrupt data, not an exception. Convert with `.AsTask()` first if you need to await multiple times.
-- **`ValueTask` without `<T>` (non-generic) exists but is rare.** It represents a void-returning async operation. The same single-use rules apply, and it's easy to forget it exists — most developers only reach for `ValueTask<T>`.
-- **Benchmarking is required to justify it.** The allocation savings only matter under sustained high throughput. In a typical CRUD API doing a few hundred RPS, switching from `Task<T>` to `ValueTask<T>` produces no measurable difference and adds cognitive overhead for the team.
-- **`async` methods returning `ValueTask<T>` still allocate a state machine object on the heap when they actually go async.** The win is *only* on the synchronous fast-path. If your method has the `async` keyword and always hits an `await`, you saved nothing over `Task<T>`.
-- **You cannot use `Task.WhenAll` or `Task.WhenAny` directly with `ValueTask`.** You must call `.AsTask()` on each one first, which defeats the allocation savings entirely. Design accordingly — if you need fan-out, stick to `Task<T>`.
+- **Never await a `ValueTask<T>` more than once.** Convert with `.AsTask()` for multi-await scenarios.
+- **Don't store `ValueTask<T>` in a field.** It may become invalid when the underlying object is recycled by a pool.
+- **`ValueTask<T>` is heavier to produce correctly.** A missed `ConfigureAwait(false)` or wrong synchronous path can cause subtle bugs. Default to `Task<T>` and only switch when profiling confirms allocation pressure.
+- **`async ValueTask<T>` still allocates a state machine when it awaits.** The benefit is only for the synchronous-completion path.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand the cost model of async in .NET — specifically heap allocations, GC pressure, and when the runtime's `Task` caching already covers you.
+**What they're really testing:** Whether you know when `ValueTask` is appropriate and its one-await limitation.
 
-**Common question form:** "When would you use `ValueTask` instead of `Task`?" or "What's the performance difference between `Task<T>` and `ValueTask<T>`?"
+**Common question forms:**
+- "What is `ValueTask` and when would you use it?"
+- "What's the difference between `Task<T>` and `ValueTask<T>`?"
 
-**The depth signal:** A junior says "`ValueTask` is faster because it's a struct." A senior explains *why* the struct matters only on the synchronous path, names the single-use constraint and what breaks if you violate it, mentions that `Task<bool>` and `Task<int>` are cached by the runtime making `ValueTask` irrelevant for those types in most cases, and knows that `IValueTaskSource` is the deeper pattern used by `System.IO.Pipelines` to recycle completion sources from a pool — eliminating allocations even in the async path.
+**The depth signal:** A senior names the two required conditions (sync-path frequent + hot path), knows about the one-await constraint, and defaults to `Task<T>` unless they have profiling evidence.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/csharp-task-parallel-library.md]] — `ValueTask` is a drop-in at the call site but a different beast internally; understanding `Task` first is a prerequisite.
-- [[dotnet/async-await-internals.md]] — The async state machine behaviour explains exactly when `ValueTask` saves an allocation and when it doesn't.
-- [[dotnet/csharp-memory-and-span.md]] — `Span<T>`, `Memory<T>`, and `ValueTask` are the three pillars of zero-allocation hot-path design in .NET; they appear together in `System.IO.Pipelines`.
-- [[dotnet/csharp-cancellation-token.md]] — `ValueTask`-returning methods should still accept `CancellationToken`; the token plumbing is identical to `Task`-based methods.
+- [[dotnet/csharp/csharp-async-await.md]] — `ValueTask` is an optimisation on top of the async/await machinery
+- [[dotnet/csharp/csharp-garbage-collector.md]] — Allocation pressure from `Task<T>` is what `ValueTask` eliminates
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.valuetask-1](https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.valuetask-1)
+[ValueTask — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.valuetask-1)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

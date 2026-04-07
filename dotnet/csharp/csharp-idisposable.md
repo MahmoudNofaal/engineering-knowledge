@@ -1,168 +1,226 @@
 # C# IDisposable
 
-> `IDisposable` is a contract that says "this object holds resources the GC can't clean up automatically — call `Dispose()` when you're done with it."
+> The pattern for deterministic cleanup of resources the GC doesn't know about — file handles, database connections, network sockets, unmanaged memory — released the moment you call `Dispose()` rather than waiting for finalisation.
+
+---
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Interface** | `IDisposable` — one method: `void Dispose()` |
+| **Syntax sugar** | `using` statement / `using` declaration |
+| **Async version** | `IAsyncDisposable` + `await using` (C# 8) |
+| **C# version** | C# 1.0 (`IDisposable`), C# 2.0 (`using`), C# 8.0 (`IAsyncDisposable`) |
 
 ---
 
 ## When To Use It
 
-Implement `IDisposable` whenever your class directly holds something outside managed memory: file handles, database connections, network sockets, unmanaged memory, or wrappers around other `IDisposable` objects. If your class only holds plain managed objects (strings, lists, POCOs), you don't need it. The problem it solves is deterministic cleanup — you're telling callers exactly when resources are released, rather than waiting for the GC to eventually run a finalizer.
+Implement `IDisposable` on any class that:
+- Owns an unmanaged resource directly (file handle, socket, unmanaged memory via `SafeHandle`)
+- Owns another `IDisposable` (e.g., a class that holds a `DbContext` or `HttpClient`)
+
+Callers **must** call `Dispose()` when done. The correct way is with a `using` block — it guarantees disposal even when exceptions are thrown.
 
 ---
 
 ## Core Concept
 
-The GC knows how to reclaim managed heap memory, but it has no idea how to close a file or release a database connection — those are OS-level resources. `IDisposable` gives you a hook to do that cleanup yourself at a predictable moment. The `using` statement is just syntactic sugar that guarantees `Dispose()` is called even if an exception is thrown. The full pattern has two layers: a public `Dispose()` for callers, and a protected `Dispose(bool disposing)` that separates "called by user code" from "called by the GC finalizer" — because when the finalizer calls you, managed objects may already be gone and you should only touch unmanaged handles.
+The GC cleans up managed memory automatically but knows nothing about file handles, database connections, or native memory. Without `IDisposable`, these resources would only be released when the finaliser runs — which can be arbitrary time later, or never.
+
+`IDisposable` + `using` provides deterministic release: the resource is freed exactly when the `using` block exits, even on exception. This is analogous to RAII in C++.
+
+The standard implementation pattern separates managed resource cleanup (called from `Dispose()`) from finaliser fallback (called from `~MyClass()` if `Dispose()` is never called). Calling `GC.SuppressFinalize(this)` inside `Dispose()` tells the GC not to run the finaliser — avoiding the two-GC-cycle penalty when `Dispose()` was already called.
 
 ---
 
 ## The Code
+
+**`using` — the only correct way to consume `IDisposable`**
 ```csharp
-// --- Minimal IDisposable: wrapping a single managed disposable ---
-// Use this when your class owns one or more IDisposable fields
-// and doesn't hold unmanaged resources directly.
-public class ReportWriter : IDisposable
+// using statement: Dispose() called at end of block, even on exception
+using (var conn = new SqlConnection(connectionString))
 {
-    private StreamWriter? _writer;
+    conn.Open();
+    // ...
+} // conn.Dispose() always called here
+
+// using declaration (C# 8): Dispose() called at end of enclosing scope
+using var reader = new StreamReader("file.txt");
+string content = reader.ReadToEnd();
+// reader.Dispose() called when method returns
+```
+
+**Implementing `IDisposable` — the standard pattern**
+```csharp
+public class ResourceHolder : IDisposable
+{
+    private Stream? _stream;
     private bool _disposed;
 
-    public ReportWriter(string path)
-    {
-        _writer = new StreamWriter(path);
-    }
+    public ResourceHolder(string path)
+        => _stream = File.OpenRead(path);
 
-    public void WriteLine(string line)
+    public void DoWork()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _writer!.WriteLine(line);
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _writer?.Dispose();
-        _disposed = true;
-        GC.SuppressFinalize(this);   // no finalizer here, but good habit
-    }
-}
-```
-```csharp
-// --- Full pattern: class that holds an unmanaged resource directly ---
-// Add a finalizer as a safety net for callers who forget to call Dispose().
-public class NativeFileHandle : IDisposable
-{
-    private IntPtr _handle;
-    private bool _disposed;
-
-    public NativeFileHandle(string path)
-    {
-        _handle = NativeApi.OpenFile(path);
-    }
-
-    ~NativeFileHandle()                         // safety net — runs if Dispose was never called
-    {
-        Dispose(disposing: false);
+        // ... use _stream ...
     }
 
     public void Dispose()
     {
         Dispose(disposing: true);
-        GC.SuppressFinalize(this);              // finalizer no longer needed
+        GC.SuppressFinalize(this); // don't run finaliser — we already cleaned up
     }
 
     protected virtual void Dispose(bool disposing)
     {
         if (_disposed) return;
-
         if (disposing)
-        {
-            // safe to touch managed objects here
-        }
-
-        if (_handle != IntPtr.Zero)
-        {
-            NativeApi.CloseFile(_handle);       // always release unmanaged handle
-            _handle = IntPtr.Zero;
-        }
-
+            _stream?.Dispose(); // managed resource — only dispose from Dispose(), not finaliser
+        _stream = null;
         _disposed = true;
     }
+
+    ~ResourceHolder() => Dispose(disposing: false); // fallback — runs if Dispose() not called
 }
 ```
-```csharp
-// --- Calling disposable objects: always use `using` ---
-using var writer = new ReportWriter("output.txt");
-writer.WriteLine("Hello");
-// Dispose() is called here automatically, even if an exception was thrown above
 
-// Equivalent without using (pre-C# 8 style or when you need explicit scope):
-ReportWriter? writer2 = null;
-try
-{
-    writer2 = new ReportWriter("output2.txt");
-    writer2.WriteLine("Hello");
-}
-finally
-{
-    writer2?.Dispose();
-}
-```
+**`IAsyncDisposable` — for async cleanup (C# 8)**
 ```csharp
-// --- Async version: IAsyncDisposable (EF Core, HttpClient, etc.) ---
-public class AsyncDbSession : IAsyncDisposable
+public class AsyncResource : IAsyncDisposable
 {
-    private readonly SqlConnection _conn;
+    private readonly NetworkStream _stream;
 
-    public AsyncDbSession(string connString)
-    {
-        _conn = new SqlConnection(connString);
-    }
+    public AsyncResource(string host, int port)
+        => _stream = new TcpClient(host, port).GetStream();
 
     public async ValueTask DisposeAsync()
     {
-        await _conn.DisposeAsync();
+        await _stream.FlushAsync();
+        await _stream.DisposeAsync();
         GC.SuppressFinalize(this);
     }
 }
 
-// Caller:
-await using var session = new AsyncDbSession(connectionString);
+await using var resource = new AsyncResource("localhost", 8080);
+// DisposeAsync() called on scope exit
+```
+
+**Dispose in `IDisposable` owners — cascade disposal**
+```csharp
+public class OrderRepository : IDisposable
+{
+    private readonly DbContext _context; // owned resource
+    private bool _disposed;
+
+    public OrderRepository(DbContext context) => _context = context;
+
+    public Task<Order?> FindAsync(int id, CancellationToken ct)
+        => _context.Set<Order>().FindAsync(new object[] { id }, ct).AsTask();
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _context.Dispose(); // cascade — dispose what we own
+        _disposed = true;
+        GC.SuppressFinalize(this);
+    }
+}
+```
+
+---
+
+## Real World Example
+
+A multi-resource unit of work disposes everything in a single `using` block via `IAsyncDisposable`.
+
+```csharp
+public class DataExportService : IAsyncDisposable
+{
+    private readonly IDbConnection _connection;
+    private readonly FileStream _output;
+    private readonly StreamWriter _writer;
+    private bool _disposed;
+
+    public static async Task<DataExportService> CreateAsync(string dbConn, string outputPath)
+    {
+        var conn   = new SqlConnection(dbConn);
+        await conn.OpenAsync();
+        var output = new FileStream(outputPath, FileMode.Create);
+        return new DataExportService(conn, output);
+    }
+
+    private DataExportService(IDbConnection connection, FileStream output)
+    {
+        _connection = connection;
+        _output     = output;
+        _writer     = new StreamWriter(_output);
+    }
+
+    public async Task ExportAsync(CancellationToken ct)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT Id, Name FROM Products";
+        using var reader = await ((DbCommand)cmd).ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            await _writer.WriteLineAsync($"{reader[0]},{reader[1]}");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        await _writer.DisposeAsync();
+        await _output.DisposeAsync();
+        _connection.Dispose();
+        _disposed = true;
+        GC.SuppressFinalize(this);
+    }
+}
+
+await using var exporter = await DataExportService.CreateAsync(connStr, "export.csv");
+await exporter.ExportAsync(ct);
+// DisposeAsync: writer flushed, file closed, DB connection returned to pool
 ```
 
 ---
 
 ## Gotchas
 
-- **`Dispose()` must be idempotent — calling it twice should be safe.** The `if (_disposed) return;` guard is not optional. Many callers and frameworks (EF Core, ASP.NET middleware) may call `Dispose()` more than once. If you skip the guard and call `_writer.Dispose()` twice, `StreamWriter` handles it, but your custom unmanaged cleanup likely won't.
-- **`using var` scope ends at the enclosing block, not the line.** `using var conn = new SqlConnection(...)` inside a method keeps the connection open until the method returns — not just until the next statement. If you open a connection early and do unrelated work after, you're holding the connection longer than you think. Use an explicit `{ }` block to tighten the scope.
-- **Implement `IAsyncDisposable` when your cleanup is async.** If `Dispose()` calls `.GetAwaiter().GetResult()` on an async method to flush or close something, you risk deadlocks in ASP.NET Core contexts. If cleanup needs `await`, implement `IAsyncDisposable` and use `await using`.
-- **Don't throw exceptions from `Dispose()`.** If `Dispose()` throws inside a `using` block that is already unwinding from another exception, the original exception is silently swallowed. Wrap cleanup code in try/catch inside `Dispose` and log errors rather than rethrowing.
-- **`protected virtual Dispose(bool)` exists for inheritance, not just for finalizers.** If a subclass adds its own resources, it should override `Dispose(bool disposing)`, call `base.Dispose(disposing)`, and clean up its own fields. If you seal your class, skip `virtual` — but the bool overload still keeps managed vs. unmanaged cleanup logically separated and is worth keeping.
+- **Not calling `Dispose()` is a resource leak — not just a performance issue.** File handles, database connections, and sockets are finite OS resources. Leaking them causes `IOException`, `SqlException`, or connection pool exhaustion.
+- **Double-dispose must be safe.** `Dispose()` is expected to be idempotent — the second call does nothing. Always guard with `if (_disposed) return`.
+- **Finaliser is a fallback, not an alternative.** Don't rely on the finaliser for timely cleanup. It runs on an unpredictable GC cycle and on a separate thread. Use `using` for deterministic cleanup.
+- **`using` on `IAsyncDisposable` without `await` calls synchronous `Dispose()` if available, not `DisposeAsync()`.** Always use `await using` for `IAsyncDisposable`.
+- **Event subscribers keep the subscriber alive.** Unsubscribe in `Dispose()` — see events topic.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand the boundary between managed and unmanaged resources, and why deterministic cleanup exists at all.
+**What they're really testing:** Whether you understand deterministic resource cleanup vs GC finalisation, and the `using` pattern as the enforcement mechanism.
 
-**Common question form:** "When do you implement `IDisposable`?" or "What's the difference between `Dispose` and a finalizer?" or "What does `GC.SuppressFinalize` do?"
+**Common question forms:**
+- "What is `IDisposable` and when do you implement it?"
+- "Why use `using` instead of just calling `Dispose()`?"
+- "What's the difference between `Dispose` and a finaliser?"
 
-**The depth signal:** A junior knows to use `using` and that `IDisposable` is for "cleanup." A senior explains that finalizers exist as a *safety net* for unmanaged handles — not as the primary cleanup path — and that `GC.SuppressFinalize` is critical because objects with finalizers survive one extra GC cycle before collection (they go on the finalization queue), which increases memory pressure. They also know when to reach for `IAsyncDisposable` vs `IDisposable`, and that the `Dispose(bool disposing)` split exists specifically because when the finalizer calls `Dispose(false)`, managed objects in the graph may already have been collected and accessing them is undefined behavior.
+**The depth signal:** A senior explains that `Dispose()` is deterministic (called at a known point), while finalisation is non-deterministic (GC decides). They know `GC.SuppressFinalize` avoids the two-cycle penalty, that double-dispose must be safe, and that not disposing a connection exhausts the connection pool — not just "wastes memory."
 
 ---
 
 ## Related Topics
 
-- [[dotnet/csharp-garbage-collector.md]] — `IDisposable` is the user-facing interface to GC lifecycle; understanding generations and finalization explains *why* the pattern is shaped the way it is
-- [[dotnet/async-and-valuetask.md]] — `IAsyncDisposable` and `await using` are the async counterparts; `ValueTask` appears in `DisposeAsync()` return types
-- [[dotnet/csharp-reflection.md]] — DI containers use reflection to discover and call `Dispose()` on registered services at scope end; knowing both explains how scoped lifetimes work
-- [[dotnet/dependency-injection.md]] — ASP.NET Core's DI container calls `Dispose()` automatically on scoped and transient services it created; understanding this prevents double-dispose bugs
+- [[dotnet/csharp/csharp-garbage-collector.md]] — The GC handles memory; `IDisposable` handles everything else
+- [[dotnet/csharp/csharp-events.md]] — Unsubscribing from events in `Dispose()` prevents subscriber-as-GC-root memory leaks
+- [[dotnet/csharp/csharp-async-await.md]] — `IAsyncDisposable` and `await using` for async cleanup
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose)
+[IDisposable — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

@@ -1,152 +1,157 @@
 # C# Garbage Collector
 
-> The GC is the .NET runtime's automatic memory manager — it tracks which objects are still reachable and periodically frees the ones that aren't.
+> The .NET GC is a generational, mark-and-compact heap manager that automatically reclaims memory for objects with no live references — freeing you from manual `malloc`/`free` while introducing pauses and allocation cost as tradeoffs.
 
 ---
 
-## When To Use It
+## Quick Reference
 
-You're always using it — there's no opt-out. What matters is understanding it well enough to avoid fighting it. It matters most when you're diagnosing high memory usage, GC-induced latency spikes, or `OutOfMemoryException` in long-running services. Don't try to outsmart it with manual `GC.Collect()` calls in production; that almost always makes things worse.
+| Generation | Collected | Contents | Cost |
+|---|---|---|---|
+| Gen 0 | Most frequently | Short-lived temporaries | Fast — small heap |
+| Gen 1 | Occasionally | Survived one Gen 0 | Medium |
+| Gen 2 | Rarely | Long-lived objects | Slow — full heap scan |
+| LOH | With Gen 2 | Objects ≥ 85 KB | Never compacted (by default) |
+
+---
+
+## When To Worry About It
+
+The GC runs transparently for most code. Worry about it when:
+- Profiler shows high allocation rate or frequent Gen 0 collections in tight loops
+- Latency spikes in a low-latency service correlate with GC pauses
+- `OutOfMemoryException` despite having plenty of RAM (fragmented LOH)
+
+The right response to GC pressure is **reduce allocations** — not fight the GC with manual tricks.
 
 ---
 
 ## Core Concept
 
-The GC divides the heap into three generations: 0, 1, and 2. New objects land in Gen 0. If they survive a collection, they get promoted to Gen 1, then Gen 2. The insight behind this is that most objects die young — short-lived allocations like loop variables and method return values get collected cheaply in Gen 0 without touching long-lived objects in Gen 2. Gen 2 collections are expensive because they scan the whole heap and block threads (a "full GC" or "stop-the-world" pause). There's also a separate Large Object Heap (LOH) for objects ≥ 85,000 bytes — these skip Gen 0/1 entirely and are collected alongside Gen 2. The GC determines reachability by tracing from "roots" (static fields, local variables, CPU registers) — anything not reachable from a root is dead and its memory is reclaimed.
+The GC divides the heap into three generations. Every new object starts in Gen 0 — the smallest, cheapest-to-collect generation. If an object survives a Gen 0 collection, it's promoted to Gen 1. Survive Gen 1, promoted to Gen 2. Gen 2 collections scan the whole heap and are expensive.
+
+The insight: **most objects die young** (short-lived temporaries). By keeping Gen 0 small and collecting it often, the GC handles high allocation rates with low latency — most pauses are microseconds for Gen 0.
+
+GC pauses ("stop-the-world") freeze all managed threads while the GC traces live references. Server GC and background GC in .NET reduce pause length but can't eliminate them entirely.
+
+The **Large Object Heap (LOH)** stores objects ≥ 85,000 bytes. It's never compacted by default, causing fragmentation over time. Allocating many large short-lived objects can exhaust the LOH.
 
 ---
 
 ## The Code
+
+**Understanding allocation patterns**
 ```csharp
-// --- Implementing IDisposable correctly (the standard pattern) ---
-public class FileProcessor : IDisposable
-{
-    private FileStream? _stream;
-    private bool _disposed;
+// These allocate on the heap — GC must eventually collect them
+var list    = new List<int>();         // one heap allocation
+var person  = new Person("Alice", 30); // one heap allocation
+var boxed   = (object)42;             // boxing — one heap allocation
 
-    public FileProcessor(string path)
-    {
-        _stream = File.OpenRead(path);
-    }
-
-    public void Process() { /* read from _stream */ }
-
-    public void Dispose()
-    {
-        Dispose(disposing: true);
-        GC.SuppressFinalize(this);   // tell GC: no need to call finalizer
-    }
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (_disposed) return;
-        if (disposing)
-            _stream?.Dispose();      // free managed resources
-        _disposed = true;
-    }
-}
-
-// Caller always uses using — guarantees Dispose even on exception
-using var processor = new FileProcessor("data.csv");
-processor.Process();
+// These DON'T allocate (or allocate once)
+int x = 42;                    // stack — no GC
+Span<byte> buf = stackalloc byte[64]; // stack — no GC
+static readonly Func<int, bool> IsEven = static n => n % 2 == 0; // one alloc, reused
 ```
+
+**Reducing allocations — common patterns**
 ```csharp
-// --- Adding a finalizer (only when holding unmanaged resources directly) ---
-public class NativeBuffer : IDisposable
+// Object pooling — reuse expensive objects
+var pool = System.Buffers.ArrayPool<byte>.Shared;
+byte[] buffer = pool.Rent(4096); // from pool — no allocation if available
+try { /* use buffer */ }
+finally { pool.Return(buffer); }
+
+// Avoid per-iteration allocations in loops
+var sb = new StringBuilder(); // allocate OUTSIDE loop
+for (int i = 0; i < 10_000; i++)
 {
-    private IntPtr _handle;
-    private bool _disposed;
-
-    public NativeBuffer()
-    {
-        _handle = NativeLib.Alloc(1024);
-    }
-
-    ~NativeBuffer()                             // finalizer — GC calls this if Dispose was skipped
-    {
-        Dispose(disposing: false);
-    }
-
-    public void Dispose()
-    {
-        Dispose(disposing: true);
-        GC.SuppressFinalize(this);
-    }
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (_disposed) return;
-        NativeLib.Free(_handle);                // always free unmanaged handle
-        _handle = IntPtr.Zero;
-        _disposed = true;
-    }
+    sb.Clear();
+    sb.Append("Item ").Append(i);
+    Process(sb.ToString()); // one allocation per iteration instead of many
 }
 ```
+
+**LOH — avoid large short-lived allocations**
 ```csharp
-// --- WeakReference: hold a reference without preventing collection ---
-var cache = new Dictionary<int, WeakReference<byte[]>>();
-
-void Store(int id, byte[] data) =>
-    cache[id] = new WeakReference<byte[]>(data);
-
-byte[] Get(int id)
+// BAD: each call allocates 1 MB on LOH — fragments LOH over time
+void ProcessBad()
 {
-    if (cache.TryGetValue(id, out var weak) &&
-        weak.TryGetTarget(out var data))        // returns false if GC already collected it
-        return data;
+    byte[] buffer = new byte[1_024_000]; // LOH — never compacted
+    // ... use and discard ...
+}
 
-    // cache miss — reload from source
-    var fresh = LoadFromDisk(id);
-    Store(id, fresh);
-    return fresh;
+// GOOD: rent from pool — LOH object lives for the app lifetime
+void ProcessGood()
+{
+    byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(1_024_000);
+    try { /* use */ }
+    finally { System.Buffers.ArrayPool<byte>.Shared.Return(buffer); }
 }
 ```
+
+**GC APIs — rarely needed but useful for diagnostics**
 ```csharp
-// --- Checking GC pressure in diagnostics / benchmarks ---
-long before = GC.GetTotalMemory(forceFullCollection: false);
-long gen0Before = GC.CollectionCount(0);
+// Force collection — use only in benchmarks/tests, never production
+GC.Collect();
+GC.WaitForPendingFinalizers();
 
-RunWorkload();
+// Allocation diagnostics
+long before = GC.GetTotalAllocatedBytes(precise: true);
+DoWork();
+long after  = GC.GetTotalAllocatedBytes(precise: true);
+Console.WriteLine($"Allocated: {after - before} bytes");
 
-long gen0After = GC.CollectionCount(0);
-Console.WriteLine($"Gen 0 collections during workload: {gen0After - gen0Before}");
-Console.WriteLine($"Memory delta: {GC.GetTotalMemory(false) - before:N0} bytes");
+// Tell GC a large external resource has been allocated
+GC.AddMemoryPressure(nativeSize);   // hints: collect sooner
+GC.RemoveMemoryPressure(nativeSize); // when released
 ```
+
+---
+
+## Common Misconceptions
+
+**"Calling `GC.Collect()` in production helps performance"**
+It usually hurts — you force a full Gen 2 collection (expensive) at a time of your choosing rather than the GC's. The GC's heuristics are well-tuned. Only valid exceptions: after a known large allocation spike (like loading a level in a game) to establish a known clean state.
+
+**"The GC runs on a separate thread so my code never pauses"**
+Background GC parallelises much of the work, but there are still brief stop-the-world pauses for synchronisation. Server GC has multiple heaps (one per logical CPU) and shorter pauses, but they still exist.
 
 ---
 
 ## Gotchas
 
-- **Finalizers delay collection by one GC cycle.** When an object with a finalizer becomes unreachable, the GC puts it on the finalizer queue instead of freeing it immediately. It gets collected in the *next* cycle. If you allocate many finalizable objects quickly, you grow the finalizer queue and increase memory pressure. Always call `GC.SuppressFinalize(this)` inside `Dispose` to short-circuit this.
-- **LOH is not compacted by default.** Objects on the Large Object Heap (≥ 85 KB) are collected but the freed space isn't moved together. This causes LOH fragmentation — you can end up with plenty of total free memory but no contiguous block large enough for a new allocation, causing an `OutOfMemoryException`. You can opt in to LOH compaction with `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce` before a `GC.Collect()`, but it's expensive.
-- **Captured variables in lambdas/closures create hidden long-lived references.** If a lambda stored in a static field or a long-lived event captures a local object, that object is rooted for the lifetime of the lambda — it never gets collected. This is one of the most common sources of unintentional memory leaks in C# services.
-- **`GC.Collect()` in production almost always backfires.** It forces a full Gen 2 collection, which is the most expensive kind and triggers a stop-the-world pause. The GC is better than you at deciding when to collect. Only use it in controlled scenarios like benchmarks or after releasing a known large object where you want to measure memory accurately.
-- **Server GC vs Workstation GC behave differently.** ASP.NET Core uses Server GC by default — it runs a GC thread per logical core and prioritizes throughput over latency. Workstation GC (the default for console apps) prioritizes lower pause times. A service that behaves fine in local development (Workstation GC) can have very different memory and pause characteristics in production (Server GC). You can control this in `runtimeconfig.json` with `"System.GC.Server": true/false`.
+- **Event subscriptions root the subscriber in the publisher.** A short-lived subscriber that doesn't unsubscribe keeps itself alive as long as the publisher lives. The most common managed memory leak.
+- **Static fields live forever.** A `static List<T>` never gets GC'd. Growing it indefinitely is a memory leak.
+- **Closures captured in long-lived delegates root their captured variables.** A closure that captures `DbContext` and is stored in a static event keeps the context alive.
+- **`GC.KeepAlive(obj)` prevents premature collection.** When interoperating with native code that holds an unmanaged handle, the managed wrapper can be collected before the native side is done.
+- **Finalisation adds two GC cycles.** An object with a finalizer (`~MyClass()`) is placed on the finalisation queue rather than collected immediately. This promotes it to Gen 1 or 2, delaying reclamation by at least one collection cycle.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand generational collection, why `IDisposable` exists, and the difference between managed memory and unmanaged resources.
+**What they're really testing:** Whether you understand the generational model and can reason about what causes GC pressure, not just that GC "manages memory."
 
-**Common question form:** "Explain how the GC works in .NET" or "What's the difference between `Dispose` and a finalizer?" or "How would you find a memory leak in a .NET service?"
+**Common question forms:**
+- "How does the .NET GC work?"
+- "What is the Large Object Heap?"
+- "What causes GC pauses and how do you reduce them?"
 
-**The depth signal:** A junior knows `IDisposable`, `using`, and that the GC frees memory automatically. A senior explains *why* finalizers exist separately from `Dispose` (unmanaged resources can't be freed by the GC itself — it has no knowledge of what `IntPtr` points to), why `GC.SuppressFinalize` matters for performance (skips the two-cycle finalizer queue), and how to diagnose a real leak: attaching dotMemory or using `dotnet-dump` + `dotnet-gcdump` to take a heap snapshot, then looking for unexpected object retention — specifically, following the reference chain from a bloated type back to its GC root to find the accidental capture or forgotten event subscription.
+**The depth signal:** A senior explains the generational hypothesis — most objects die young, so Gen 0 collections are cheap and frequent. They know the LOH is for ≥ 85 KB objects, is never compacted by default (causing fragmentation), and the fix is `ArrayPool<T>`. They can name the three concrete allocation anti-patterns: boxing in loops, string concatenation in loops, and event subscription leaks.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/idisposable-pattern.md]] — the full `IDisposable` / finalizer pattern is the main interface between your code and GC lifecycle
-- [[dotnet/value-types-vs-reference-types.md]] — stack-allocated value types don't go through the GC at all; understanding the difference explains why structs reduce GC pressure
-- [[dotnet/memory-and-span.md]] — `Span<T>`, `Memory<T>`, and `ArrayPool<T>` are the primary tools for reducing GC allocations in hot paths
-- [[dotnet/async-and-valuetask.md]] — `ValueTask` exists specifically to avoid the `Task` allocation that would otherwise pressure Gen 0 in high-throughput async code
+- [[dotnet/csharp/csharp-idisposable.md]] — Deterministic cleanup of unmanaged resources; complements GC for non-memory resources
+- [[dotnet/csharp/csharp-span-memory.md]] — Zero-allocation patterns that reduce GC pressure
+- [[dotnet/csharp/csharp-boxing-unboxing.md]] — A major source of unexpected allocations
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals)
+[Fundamentals of garbage collection — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

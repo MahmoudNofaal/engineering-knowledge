@@ -1,132 +1,139 @@
 # C# Unsafe Code
 
-> Unsafe code lets you work directly with raw memory pointers in C#, bypassing the GC and the type system entirely.
+> Code marked with the `unsafe` keyword that can use raw pointers — bypassing the managed type system for direct memory access, interop with native libraries, or maximum performance in extremely specific scenarios.
+
+---
+
+## Quick Reference
+
+| | |
+|---|---|
+| **What it is** | Direct pointer arithmetic, fixed memory addresses, unmanaged struct access |
+| **Enable** | `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` in `.csproj` |
+| **Use when** | P/Invoke interop, SIMD intrinsics, specific zero-copy patterns |
+| **Avoid when** | Any scenario Span\<T\> or managed code can handle |
+| **C# version** | C# 1.0 |
 
 ---
 
 ## When To Use It
 
-Use it when you need to squeeze the last bit of performance out of memory-intensive operations: parsing binary protocols, writing image/audio processing pipelines, interoperating with native libraries that expect raw pointers, or implementing data structures that can't afford GC overhead. Don't reach for it until you've exhausted `Span<T>`, `Memory<T>`, and `stackalloc` — those cover 90% of low-level memory needs without the risks. Unsafe code requires the `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` MSBuild property and conscious sign-off that you're taking ownership of memory safety.
+Use `unsafe` code only when the managed alternatives genuinely can't meet the requirement — usually P/Invoke interop with native libraries that accept `void*`, or when writing vectorised SIMD code with `System.Runtime.Intrinsics`. For everything else — zero-allocation processing, slicing, binary parsing — `Span<T>` and `stackalloc` cover the use cases without unsafe semantics.
 
 ---
 
 ## Core Concept
 
-Normally the CLR tracks every object reference so the GC can move objects around during compaction without breaking your code. Unsafe code steps outside that guarantee. You get a raw pointer — just an integer holding a memory address — and you can read or write whatever is at that address. Nothing stops you from going one element past the end of an array, writing into memory owned by another object, or dereferencing a pointer after the GC has moved or collected what it pointed to. The `fixed` statement is the bridge: it pins a managed object in place so the GC can't move it while you hold a pointer to it. Once you leave the `fixed` block, the pin is released and the GC can do what it wants again. Everything unsafe must live inside an `unsafe` block or method marked `unsafe`.
+In managed C#, the GC can move objects in memory (compaction). Pointers to managed objects would become invalid after a GC compaction. `unsafe` pointers bypass the managed type system, so you must either:
+1. `fixed` pin a managed object so the GC can't move it (temporary)
+2. Use `stackalloc` (stack memory — GC never moves it)
+3. Use unmanaged memory (`Marshal.AllocHGlobal`, `NativeMemory.Alloc`)
+
+Everything inside an `unsafe` block bypasses bounds checking and type safety. A wrong pointer arithmetic expression causes memory corruption or a crash — no `IndexOutOfRangeException`.
 
 ---
 
 ## The Code
+
+**`fixed` — pin managed memory for pointer access**
 ```csharp
-// --- Basic pointer arithmetic: sum an array without bounds checks ---
-unsafe static long SumFast(int[] data)
+unsafe void CopyBytes(byte[] source, byte[] dest, int count)
 {
-    long total = 0;
-    fixed (int* ptr = data)          // pin the array; ptr is a raw pointer to element 0
+    fixed (byte* src = source, dst = dest)
     {
-        int* end = ptr + data.Length;
-        for (int* p = ptr; p < end; p++)
-            total += *p;             // dereference pointer to read the int
-    }                                // array is unpinned here
-    return total;
+        // src and dst are pinned — GC won't move them during this block
+        Buffer.MemoryCopy(src, dst, dest.Length, count);
+    }
+    // Pinning released when fixed block exits
 }
 ```
-```csharp
-// --- stackalloc: allocate a buffer on the stack, no GC involved ---
-unsafe static void ParseHeader(ReadOnlySpan<byte> input)
-{
-    // stackalloc returns a pointer; wrapping in Span<byte> keeps it manageable
-    Span<byte> buffer = stackalloc byte[64];
-    input[..Math.Min(input.Length, 64)].CopyTo(buffer);
 
-    fixed (byte* ptr = buffer)
+**Pointer arithmetic and struct access**
+```csharp
+unsafe void ProcessPixels(byte* pixels, int pixelCount)
+{
+    for (int i = 0; i < pixelCount; i++)
     {
-        // read a little-endian int32 at offset 0
-        int magic = *(int*)ptr;
-        Console.WriteLine($"Magic: 0x{magic:X8}");
+        byte* px = pixels + (i * 4); // RGBA
+        px[0] = (byte)(px[0] * 0.9); // darken red channel
+        px[1] = (byte)(px[1] * 0.9);
+        px[2] = (byte)(px[2] * 0.9);
+        // px[3] — alpha unchanged
     }
 }
 ```
-```csharp
-// --- Struct pointer: mutate a struct in place without copying ---
-public struct Vector3
-{
-    public float X, Y, Z;
-}
 
-unsafe static void Normalize(Vector3* v)
-{
-    float len = MathF.Sqrt(v->X * v->X + v->Y * v->Y + v->Z * v->Z);
-    if (len == 0) return;
-    v->X /= len;
-    v->Y /= len;
-    v->Z /= len;
-}
+**P/Invoke interop pattern**
+```csharp
+using System.Runtime.InteropServices;
 
-unsafe static void Example()
-{
-    var vec = new Vector3 { X = 3, Y = 4, Z = 0 };
-    Normalize(&vec);                 // pass address of stack-allocated struct
-    Console.WriteLine(vec.X);       // 0.6
-}
-```
-```csharp
-// --- Casting via pointer: reinterpret bytes without allocation ---
-// Classic trick to get the raw bits of a float as an int
-unsafe static int FloatToIntBits(float f)
-{
-    return *(int*)&f;                // reinterpret the 4 bytes of f as an int
-}
-```
-```csharp
-// --- Interop: passing a pinned buffer to a native function ---
-// Avoids marshalling overhead when the native API expects a raw byte pointer
+// Preferred: use LibraryImport (source-gen P/Invoke, C# 11+)
+[LibraryImport("native.dll")]
+private static partial int NativeCompress(byte* input, int inputLen, byte* output, int outputLen);
+
+// Or classic DllImport
 [DllImport("native.dll")]
-static extern void ProcessBuffer(byte* data, int length);
+private static extern int NativeCompress(IntPtr input, int inputLen, IntPtr output, int outputLen);
 
-unsafe static void CallNative(byte[] managed)
+unsafe int Compress(ReadOnlySpan<byte> data, Span<byte> output)
 {
-    fixed (byte* ptr = managed)
+    fixed (byte* inputPtr  = data,
+                 outputPtr = output)
     {
-        ProcessBuffer(ptr, managed.Length);
+        return NativeCompress(inputPtr, data.Length, outputPtr, output.Length);
     }
 }
+```
+
+**`sizeof` — compile-time struct size**
+```csharp
+unsafe void Example()
+{
+    Console.WriteLine(sizeof(int));     // 4
+    Console.WriteLine(sizeof(long));    // 8
+    Console.WriteLine(sizeof(double));  // 8
+
+    // sizeof on unmanaged user-defined struct
+    Console.WriteLine(sizeof(Point));  // depends on layout
+}
+
+struct Point { public float X, Y; } // 8 bytes
 ```
 
 ---
 
 ## Gotchas
 
-- **Pinning causes GC heap fragmentation.** Every `fixed` block pins an object, which means the GC can't move it during compaction. If you pin many small objects simultaneously — or hold a pin open for a long time — you fragment the managed heap and force the GC to work harder. For long-lived native interop scenarios, allocate buffers with `GCHandle.Alloc(obj, GCHandleType.Pinned)` explicitly so you control pin lifetime, or use `NativeMemory.Alloc` to stay off the managed heap entirely.
-- **`stackalloc` will silently blow the stack if the size isn't bounded.** Stack space is typically 1 MB per thread. `stackalloc byte[userInput]` with unvalidated input will cause a `StackOverflowException` that can't be caught and crashes the process. Always cap the size with a hard constant or a checked min.
-- **Pointer arithmetic doesn't throw on out-of-bounds — it silently corrupts memory.** There's no `IndexOutOfRangeException`. Writing past the end of a pinned array overwrites whatever happens to be at that address — another object, GC metadata, or the return address of a stack frame. These bugs are hard to reproduce and produce symptoms far from the actual mistake.
-- **`fixed` can only pin blittable types.** A type is blittable if it has the same memory representation in managed and unmanaged code — `int`, `float`, `byte`, structs of those. If your struct contains a `string`, `bool`, or reference type, `fixed` will refuse to compile. You need to manually marshal or restructure the type.
-- **The `unsafe` keyword doesn't make `Span<T>` unnecessary — it's the opposite.** Most code that used to require `unsafe` can now use `Span<T>` and `MemoryMarshal`, which are bounds-safe and work without `AllowUnsafeBlocks`. If you're writing new code and find yourself reaching for pointers, check `MemoryMarshal.Cast`, `MemoryMarshal.Read`, and `Unsafe.As` first — they may give you what you need without a raw pointer in sight.
+- **Unpinned managed objects can be moved by GC mid-operation.** Always use `fixed` when working with pointers to managed memory.
+- **No bounds checking.** `ptr[10000]` will access arbitrary memory. Every pointer arithmetic operation must be manually verified.
+- **`fixed` has a cost.** Pinned objects cannot be compacted — pinning many objects or holding pins too long degrades GC efficiency.
+- **`unsafe` code can corrupt managed state.** A pointer write into managed object headers crashes the process in unpredictable ways.
+- **Prefer `Span<T>` over `unsafe` for most slicing/parsing scenarios.** `Span<T>` is safe, readable, and nearly as fast.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand the CLR's memory model, what the GC actually does during compaction, and where the boundaries of the managed runtime are.
+**What they're really testing:** Whether you understand the managed/unmanaged boundary and know that `Span<T>` handles most "I need unsafe" scenarios safely.
 
-**Common question form:** "When would you use unsafe code in C#?" or "What is `fixed` and why does it exist?" or "How does `stackalloc` differ from a normal array allocation?"
+**Common question forms:**
+- "When would you use `unsafe` code?"
+- "What does `fixed` do?"
 
-**The depth signal:** A junior knows that unsafe code "lets you use pointers" and is "faster." A senior explains the specific mechanism: the GC compacts the heap by moving objects, which invalidates any raw pointer into managed memory — `fixed` exists to temporarily suspend that freedom for a specific object. They also know that `stackalloc` bypasses the heap entirely (no GC involvement, no allocation cost, automatic cleanup when the stack frame is popped), and can articulate why `Span<T>` over `stackalloc` is preferred over raw pointers for new code — it gives you bounds checking, slicing, and compatibility with the rest of the BCL without leaving the safety guarantees of the CLR.
+**The depth signal:** A senior reaches for `Span<T>` and `stackalloc` first and uses `unsafe` only when those can't work — typically P/Invoke interop. They know `fixed` pins objects to prevent GC movement and should be held as briefly as possible.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/memory-and-span.md]] — `Span<T>` and `MemoryMarshal` cover most of what used to require unsafe code, with bounds safety intact; know this before reaching for pointers
-- [[dotnet/csharp-garbage-collector.md]] — GC compaction is exactly why `fixed` exists; understanding Gen 2 collections and LOH makes pinning costs concrete
-- [[dotnet/csharp-idisposable.md]] — `NativeMemory.Alloc` and `GCHandle` both need explicit cleanup; the `IDisposable` pattern is how you wrap them safely
-- [[dotnet/interop-and-pinvoke.md]] — native interop is the most common production reason to pin managed memory; unsafe code and P/Invoke are frequently used together
+- [[dotnet/csharp/csharp-span-memory.md]] — The safe alternative for most zero-copy operations
+- [[dotnet/csharp/csharp-stackalloc.md]] — Stack allocation — usable without `unsafe` via `Span<T>`
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/unsafe-code](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/unsafe-code)
+[Unsafe code — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/unsafe-code)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

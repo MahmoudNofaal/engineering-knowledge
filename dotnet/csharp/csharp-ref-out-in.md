@@ -1,140 +1,87 @@
-# C# ref, out, and in Parameters
+# C# — ref, out, and in Parameters
 
-> `ref`, `out`, and `in` let you pass a variable by reference instead of by value — meaning the method works with the original memory location, not a copy.
+> Three modifiers that change how arguments are passed to methods — all three pass a reference to the variable rather than a copy, but with different mutation and initialisation rules.
 
 ---
 
-## When To Use It
+## Quick Reference
 
-Use `out` when a method needs to return multiple values and one of them signals success/failure — the `TryParse` / `TryGet` pattern everywhere in the BCL. Use `ref` when you need to both read and write a caller's variable from inside a method, or when passing a large struct you want to mutate without copying. Use `in` when passing a large readonly struct to avoid the copy cost without allowing mutation. Don't use any of these as a substitute for returning a well-designed type — if you find yourself with four `out` parameters, return a record instead.
+| Modifier | Caller pre-initialise? | Method can write? | Use for |
+|---|---|---|---|
+| `ref` | Required | Yes | Read + write same variable |
+| `out` | Not required | Must before return | Return multiple values |
+| `in` | Required | No | Read-only pass of large struct |
 
 ---
 
 ## Core Concept
 
-By default C# passes everything by value: the method gets a copy of the argument, and changes to the parameter don't affect the caller's variable. These three keywords change that by passing the variable's address instead of its value. `ref` says "I might read and write this." `out` says "I will definitely write this before returning — I promise — and the caller's variable doesn't need to be initialized first." `in` says "I'll read this but never write it, and I want to avoid the copy cost." For value types the performance difference is real — passing a 64-byte struct by `in` or `ref` costs 8 bytes (a pointer) instead of 64. For reference types, you're already passing a reference, so `ref` on a reference type means "the method can replace the reference itself," which is rarely what you want.
+By default, C# passes arguments by value — the method gets a copy. For value types (structs) this means mutations inside the method don't affect the caller's variable. `ref`, `out`, and `in` all pass a reference to the caller's variable instead.
+
+- **`ref`**: bidirectional — method reads and writes the caller's variable. Caller must initialise before passing.
+- **`out`**: write-only from the caller's perspective — method must assign before returning. Caller doesn't need to initialise. The pattern for returning multiple values before tuples existed.
+- **`in`**: read-only reference — passes large structs by reference to avoid copying, but prevents mutation. Without `readonly struct`, the compiler may make a defensive copy.
 
 ---
 
 ## The Code
+
+**`ref` — bidirectional pass**
 ```csharp
-// --- out: the TryParse pattern ---
-// The caller doesn't need to initialize result before passing it.
-// The method must assign it on every code path.
-static bool TryDivide(int numerator, int denominator, out double result)
-{
-    if (denominator == 0)
-    {
-        result = 0;          // must assign even on the failure path
-        return false;
-    }
-    result = (double)numerator / denominator;
-    return true;
-}
+void Double(ref int n) => n *= 2;
 
-if (TryDivide(10, 3, out double quotient))
-    Console.WriteLine(quotient);         // 3.333...
-
-// Discard an out you don't care about
-int.TryParse("abc", out _);
+int x = 5;
+Double(ref x);         // must use 'ref' at call site
+Console.WriteLine(x);  // 10 — caller's variable modified
 ```
+
+**`out` — return multiple values**
 ```csharp
-// --- ref: read AND write the caller's variable ---
-static void Swap(ref int a, ref int b)
+bool TryDivide(int a, int b, out int result, out string error)
 {
-    int temp = a;
-    a = b;
-    b = temp;
+    if (b == 0) { result = 0; error = "Divide by zero"; return false; }
+    result = a / b; error = ""; return true;
 }
 
-int x = 1, y = 2;
-Swap(ref x, ref y);
-Console.WriteLine($"{x} {y}");   // 2 1 — original variables changed
+if (TryDivide(10, 2, out int r, out string err))
+    Console.WriteLine($"Result: {r}");
 ```
+
+**`in` — large struct without copy**
 ```csharp
-// --- ref with structs: avoid copying a large struct ---
-public struct Matrix4x4          // hypothetical 64-byte struct
-{
-    public float M11, M12, M13, M14;
-    public float M21, M22, M23, M24;
-    public float M31, M32, M33, M34;
-    public float M41, M42, M43, M44;
-}
+static double Length(in Matrix4x4 m)
+    => Math.Sqrt(m.M11 * m.M11 + m.M22 * m.M22 + m.M33 * m.M33 + m.M44 * m.M44);
 
-// Without ref: copies 64 bytes on every call
-static void ScaleWithoutRef(Matrix4x4 m, float factor) { /* m is a copy */ }
-
-// With ref: passes an 8-byte pointer; mutation affects the caller's struct
-static void Scale(ref Matrix4x4 m, float factor)
-{
-    m.M11 *= factor;
-    m.M22 *= factor;
-    m.M33 *= factor;
-}
+var matrix = new Matrix4x4 { /* ... */ };
+double len = Length(in matrix);  // passes reference — no 64-byte copy
+// Length(matrix); // also works — 'in' is optional at call site
 ```
-```csharp
-// --- in: readonly ref — avoid the copy, prevent mutation ---
-// Compiler error if you try to assign to an `in` parameter inside the method.
-static float Trace(in Matrix4x4 m)
-{
-    return m.M11 + m.M22 + m.M33 + m.M44;   // read-only; no copy
-    // m.M11 = 0; // compile error
-}
 
-var mat = new Matrix4x4 { M11 = 1, M22 = 2, M33 = 3, M44 = 4 };
-Console.WriteLine(Trace(in mat));   // 10
-```
+**`ref` struct members (C# 11+)**
 ```csharp
-// --- ref returns and ref locals (advanced) ---
-// Return a reference to an element inside an array — no copy
-static ref int FindFirst(int[] arr, int target)
+// ref fields in ref structs — allows Span<T>-like types
+ref struct SpanWrapper<T>
 {
-    for (int i = 0; i < arr.Length; i++)
-        if (arr[i] == target)
-            return ref arr[i];              // return the actual slot, not a copy
-    throw new InvalidOperationException("Not found");
+    private ref T _ref;
+    public SpanWrapper(ref T value) => _ref = ref value;
+    public ref T Value => ref _ref;
 }
-
-int[] data = { 10, 20, 30 };
-ref int slot = ref FindFirst(data, 20);
-slot = 99;                                 // modifies data[1] directly
-Console.WriteLine(data[1]);               // 99
 ```
 
 ---
 
 ## Gotchas
 
-- **`out` parameters must be assigned on every code path, but the compiler only checks assignments — not that the value is meaningful.** Assigning `result = default` on an error path satisfies the compiler but can produce confusing behaviour if the caller ignores the return value and uses the `out` variable anyway. Document what the `out` value means on failure, or use a nullable return type instead.
-- **`in` doesn't guarantee a copy is never made.** If you call a method that takes `in T` and pass a variable that isn't already in a fixed location (e.g., a property that requires a getter call), the compiler silently materializes a temporary copy and passes a reference to that. You get the reference semantics with none of the savings. This is called a *defensive copy*. It shows up with interface calls on `in` struct parameters — the JIT can't be sure the method won't mutate the struct through the interface, so it copies.
-- **`ref` on a reference type passes a reference to the reference.** `ref string s` lets the method replace the caller's `string` variable with a different string entirely. This is almost never what you want and confuses readers. If you just want to mutate the object's contents, pass it normally — reference types are already passed by reference in the sense that both caller and callee share the same object.
-- **You can't use `ref` / `out` / `in` with async methods or iterators.** The parameters can't be captured in a state machine. If you need to return multiple values from an async method, return a tuple or a record. This is a compile error, not a runtime one, but it catches people who try to port synchronous `TryGet` patterns to async.
-- **`ref` locals and `ref` returns can dangle.** A `ref` to a local variable inside a method is invalid once the method returns — the stack frame is gone. The compiler catches obvious cases, but with `ref` returns from methods that return stack-allocated memory (e.g., `stackalloc`), you can produce a genuinely dangerous dangling reference in unsafe contexts.
-
----
-
-## Interview Angle
-
-**What they're really testing:** Whether you understand value semantics vs. reference semantics at the call site, and whether you can reason about when copies happen.
-
-**Common question form:** "What's the difference between `ref` and `out`?" or "When would you use `in` on a parameter?" or "Why does `TryParse` use `out` instead of just returning a nullable?"
-
-**The depth signal:** A junior knows `out` means "the method sets it" and `ref` means "two-way." A senior explains the *defensive copy* problem with `in` and struct interfaces, knows that `ref` returns let you alias into collections without copying (and why Span-based APIs use this internally), and can articulate why `out` exists as a distinct keyword from `ref` — it allows the compiler to enforce definite assignment, which is what makes the `TryParse` pattern safe: the caller is guaranteed the variable is written before it's read, regardless of which branch the method took.
-
----
-
-## Related Topics
-
-- [[dotnet/value-types-vs-reference-types.md]] — the entire point of these keywords is controlling copy semantics for value types; they're meaningless without that foundation
-- [[dotnet/memory-and-span.md]] — `Span<T>` and `ref struct` types rely heavily on ref semantics internally; understanding `ref` returns is prerequisite knowledge
-- [[dotnet/csharp-boxing-unboxing.md]] — passing a value type as `object` boxes it; `in` / `ref` are how you pass large structs without boxing or copying
-- [[dotnet/csharp-unsafe-code.md]] — `ref` locals and `ref` returns are the managed alternative to pointer arithmetic for in-place mutation; both solve the same performance problem from different directions
+- **`out` variables declared inline are scoped to the `if` block and beyond (C# 7+).** `if (int.TryParse(s, out int n))` — `n` is accessible after the `if`.
+- **`in` without `readonly struct` may produce defensive copies.** The compiler copies the struct before calling methods on it to ensure the method can't observe mutations. Use `readonly struct` to eliminate this.
+- **`ref return` and `ref local` (C# 7) allow returning references.** Rare but powerful for direct array element manipulation.
+- **Don't use `ref`/`out` as a substitute for a return type.** For most multiple-return scenarios, tuples or records are cleaner.
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/ref](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/ref)
+[Parameter modifiers — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters)
 
 ---
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-06*

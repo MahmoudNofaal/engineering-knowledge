@@ -1,119 +1,189 @@
 # C# Reflection
 
-> Reflection is the ability of your code to inspect and manipulate its own types, methods, and properties at runtime — without knowing them at compile time.
+> The ability to inspect and invoke types, methods, properties, and attributes at runtime — examine the structure of a type without knowing it at compile time, create instances dynamically, and call methods by name.
+
+---
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Entry point** | `typeof(T)` or `obj.GetType()` |
+| **Key types** | `Type`, `MethodInfo`, `PropertyInfo`, `FieldInfo`, `ConstructorInfo` |
+| **Cost** | Expensive — avoid in hot paths |
+| **Alternatives** | Source generators, compiled delegates, `dynamic` |
+| **C# version** | C# 1.0 |
+| **Namespace** | `System.Reflection` |
 
 ---
 
 ## When To Use It
 
-Use reflection when you need to work with types you don't know until runtime — building serializers, plugin loaders, dependency injection containers, or mapping libraries. It's also the right tool when you need to read custom attributes at runtime (e.g., validation or routing metadata).
+Use reflection when the types you need to work with are genuinely unknown at compile time — serialisers, dependency injection containers, ORMs, plugin architectures, test frameworks. These are infrastructure tools that must be generic across all user-defined types.
 
-Don't use it in hot paths. Reflection is 10–100x slower than direct calls. Also avoid it as a shortcut to bypass encapsulation — if you find yourself invoking private members in production code, it's a design smell, not a clever trick.
+Don't use reflection in hot paths or application-level code where the types are known. The overhead (10–1000× slower than direct calls), the loss of compile-time safety, and the `ArgumentException`/`NullReferenceException` mines make it painful to maintain.
 
 ---
 
 ## Core Concept
 
-When .NET compiles your code, it stores metadata about every type, method, field, and property inside the assembly (the `.dll`). Reflection is the API that lets you read and use that metadata while the program is running. You start with a `Type` object — either via `typeof(MyClass)` or `obj.GetType()` — and from there you can get handles to any member of that type. Once you have a handle (a `MethodInfo`, `PropertyInfo`, etc.), you can call it, read it, or write to it against any instance of that type. The key mental model: reflection treats your code as data.
+At runtime, every type in .NET has a corresponding `Type` object in a metadata table. `typeof(Order)` and `new Order().GetType()` both return a reference to that same `Type` object. From it, you can enumerate members, get `MethodInfo`/`PropertyInfo` objects, and invoke them.
+
+The cost model: `GetType()` is fast; `GetMethod` / `GetProperty` is moderate; `MethodInfo.Invoke()` is expensive — roughly 10–100× slower than a direct call due to boxing, argument array allocation, and security checks. Cache `MethodInfo` objects across calls; never call `GetMethod` in a loop.
+
+For production infrastructure, compile reflection discoveries to delegates once using `Expression.Lambda`, `Delegate.CreateDelegate`, or source generators.
 
 ---
 
 ## The Code
+
+**Inspecting types and members**
 ```csharp
-// --- Basic: inspect a type's members ---
-using System.Reflection;
+Type t = typeof(Order);
+Console.WriteLine(t.FullName);           // "MyApp.Models.Order"
+Console.WriteLine(t.IsClass);            // true
+Console.WriteLine(t.GetInterfaces()[0]); // first implemented interface
 
-public class Order
-{
-    public int Id { get; set; }
-    public string? Status { get; private set; }
-
-    public void Ship() => Status = "Shipped";
-}
-
-Type type = typeof(Order);
-
-foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+// Properties
+foreach (PropertyInfo prop in t.GetProperties())
     Console.WriteLine($"{prop.Name}: {prop.PropertyType.Name}");
 
-foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-    Console.WriteLine($"Method: {method.Name}");
+// Methods (public instance only by default)
+MethodInfo? method = t.GetMethod("CalculateTotal");
 ```
+
+**Invoking methods dynamically**
 ```csharp
-// --- Invoke a method dynamically ---
-var order = new Order { Id = 1 };
-MethodInfo? ship = typeof(Order).GetMethod("Ship");
-ship?.Invoke(order, null);   // equivalent to order.Ship()
-Console.WriteLine(order.Id); // 1
+Type t       = typeof(Calculator);
+object calc  = Activator.CreateInstance(t)!;
+MethodInfo m = t.GetMethod("Add", new[] { typeof(int), typeof(int) })!;
+
+int result = (int)m.Invoke(calc, new object[] { 3, 4 })!; // 7
+// Boxing int args, array allocation, security check — expensive
 ```
+
+**Reading and writing properties**
 ```csharp
-// --- Read and write a private property setter ---
-var order = new Order { Id = 42 };
-PropertyInfo? status = typeof(Order).GetProperty("Status");
-status?.SetValue(order, "Cancelled");          // bypasses private setter
-Console.WriteLine(status?.GetValue(order));    // "Cancelled"
+object order = Activator.CreateInstance(typeof(Order))!;
+PropertyInfo totalProp = typeof(Order).GetProperty("Total")!;
+
+totalProp.SetValue(order, 99.99m); // boxing decimal — expensive
+decimal val = (decimal)totalProp.GetValue(order)!;
 ```
+
+**Compiling reflection to a delegate — cache the cost**
 ```csharp
-// --- Create an instance without knowing the type at compile time ---
-// (typical in plugin loaders / DI containers)
-string typeName = "MyApp.Services.EmailService";
-Type? serviceType = Type.GetType(typeName);
-object? instance = serviceType is not null
-    ? Activator.CreateInstance(serviceType)
-    : null;
+// For a method that will be called many times, compile once to a delegate
+MethodInfo method = typeof(Order).GetMethod("CalculateTotal")!;
+var compiled = (Func<Order, decimal>)Delegate.CreateDelegate(
+    typeof(Func<Order, decimal>), method);
+
+// Subsequent calls are direct delegate invocations — fast
+decimal total = compiled(order);
 ```
+
+**Reading custom attributes**
 ```csharp
-// --- Read custom attributes (common for frameworks) ---
 [AttributeUsage(AttributeTargets.Property)]
 public class RequiredAttribute : Attribute { }
 
-public class UserForm
+public class Order
 {
-    [Required] public string Email { get; set; } = "";
-    public string? Nickname { get; set; }
+    [Required] public string CustomerName { get; set; } = "";
+    public decimal Total { get; set; }
 }
 
-foreach (var prop in typeof(UserForm).GetProperties())
+// Discover properties marked [Required]
+var requiredProps = typeof(Order)
+    .GetProperties()
+    .Where(p => p.IsDefined(typeof(RequiredAttribute), inherit: true))
+    .ToList();
+```
+
+---
+
+## Real World Example
+
+A simple object mapper uses reflection to copy properties between two types with matching names — cached for performance.
+
+```csharp
+public static class PropertyMapper
 {
-    bool isRequired = prop.GetCustomAttribute<RequiredAttribute>() is not null;
-    Console.WriteLine($"{prop.Name} required: {isRequired}");
+    private static readonly ConcurrentDictionary<(Type, Type), Action<object, object>> _cache = new();
+
+    public static TDest Map<TSource, TDest>(TSource source) where TDest : new()
+    {
+        var mapAction = _cache.GetOrAdd((typeof(TSource), typeof(TDest)), CreateMapper);
+        var dest = new TDest();
+        mapAction(source!, dest);
+        return dest;
+    }
+
+    private static Action<object, object> CreateMapper((Type src, Type dst) key)
+    {
+        var srcProps = key.src.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        var dstProps = key.dst.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .ToDictionary(p => p.Name);
+
+        var pairs = srcProps
+            .Where(sp => dstProps.TryGetValue(sp.Name, out var dp) && dp.PropertyType == sp.PropertyType)
+            .Select(sp => (sp, dstProps[sp.Name]))
+            .ToList();
+
+        // Build and compile Expression tree — reflects once, runs fast thereafter
+        var srcParam = Expression.Parameter(typeof(object), "src");
+        var dstParam = Expression.Parameter(typeof(object), "dst");
+
+        var assignments = pairs.Select(p =>
+            (Expression)Expression.Assign(
+                Expression.Property(Expression.Convert(dstParam, key.dst), p.Item2),
+                Expression.Property(Expression.Convert(srcParam, key.src), p.Item1)));
+
+        var body   = Expression.Block(assignments);
+        var lambda = Expression.Lambda<Action<object, object>>(body, srcParam, dstParam);
+        return lambda.Compile();
+    }
 }
 ```
+
+*The insight: reflection runs once per type pair (discovery + compilation). Subsequent mappings invoke the compiled lambda — direct property reads and writes, no reflection overhead.*
 
 ---
 
 ## Gotchas
 
-- **`BindingFlags` defaults exclude what you expect.** `GetMethods()` with no flags only returns `Public | Instance`. Private members, static members, and inherited members each require explicit flags. Forgetting `BindingFlags.DeclaredOnly` returns inherited `object` methods too, bloating your results.
-- **`Invoke` boxes value types.** Passing an `int` or `struct` as an argument to `Invoke(obj, args[])` causes boxing allocations on every call. In tight loops this is a measurable GC hit — cache delegates via `MethodInfo.CreateDelegate` instead.
-- **`Type.GetType(string)` silently returns null.** If the type name is wrong or the assembly isn't loaded, you get `null` — no exception. Always null-check, and for cross-assembly types use the assembly-qualified name: `"MyApp.Order, MyApp"`.
-- **Reflection ignores access modifiers — intentionally.** `SetValue` on a private property works fine. That's not a bug; it's by design. Be deliberate: this is how serializers and mappers work, but accidentally mutating private state from arbitrary caller code is a real footgun.
-- **AOT and trimming break reflection.** With Native AOT or aggressive IL trimming (Blazor, mobile, .NET 8+ publish modes), members accessed only via reflection can be stripped. You must annotate with `[DynamicallyAccessedMembers]` or the linker will silently remove your target and you'll get a `NullReferenceException` at runtime.
+- **`GetMethod` with ambiguous name throws.** If a method is overloaded, pass the parameter types: `GetMethod("Add", new[] { typeof(int), typeof(int) })`.
+- **`Invoke` returns `object` — must cast.** The cast can fail if the return type doesn't match expectations.
+- **`Activator.CreateInstance` requires a public parameterless constructor.** Types with DI constructor parameters need a custom factory.
+- **Reflection doesn't see private members by default.** Pass `BindingFlags.NonPublic | BindingFlags.Instance` to access private state.
+- **Trimming (AOT/Native AOT) removes unused members.** Reflection depends on metadata that linker trimming can remove. Annotate with `[DynamicallyAccessedMembers]` or prefer source generators.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand the boundary between compile-time and runtime type systems, and the performance and safety trade-offs of bypassing the type system.
+**What they're really testing:** Whether you understand the cost model and know when to cache or compile reflection discoveries.
 
-**Common question form:** "How would you build a lightweight DI container?" or "How does JSON serialization work under the hood?" or "When would you use reflection vs generics?"
+**Common question forms:**
+- "How does dependency injection work under the hood?"
+- "When would you use reflection and what are the risks?"
+- "How would you make reflection calls faster?"
 
-**The depth signal:** A junior knows `typeof` and `GetProperties()`. A senior explains *why* production frameworks like System.Text.Json, EF Core, and ASP.NET route registration don't just run raw reflection — they cache `MethodInfo` / `PropertyInfo` objects in a `ConcurrentDictionary<Type, ...>` on first access, and then use compiled expression trees or `ILEmit` to get delegate-speed invocation without re-paying the reflection cost on every call. The senior also knows `[DynamicallyAccessedMembers]` and what breaks silently under AOT.
+**The depth signal:** A senior names the cost model (discovery slow, invoke expensive), always caches `MethodInfo` and compiles to delegates for repeated calls, and mentions source generators or `[DynamicallyAccessedMembers]` as the AOT-safe alternative.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/expression-trees.md]] — the next step after reflection: compile a `MethodInfo` into a typed delegate for near-native performance
-- [[dotnet/source-generators.md]] — move reflection-style code generation to compile time; eliminates runtime overhead and AOT issues entirely
-- [[dotnet/dependency-injection.md]] — DI containers are the most common production use of reflection; understanding reflection explains how they work internally
-- [[dotnet/attributes-and-metadata.md]] — reflection is how custom attributes are read at runtime; the two topics are inseparable
+- [[dotnet/csharp/csharp-expression-trees.md]] — The bridge between reflection and compiled performance
+- [[dotnet/csharp/csharp-attributes.md]] — The primary reason to read type metadata at runtime
+- [[dotnet/csharp/csharp-generics.md]] — Generics often replace reflection for type-parameterised code
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/fundamentals/reflection/reflection](https://learn.microsoft.com/en-us/dotnet/fundamentals/reflection/reflection)
+[Reflection — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/reflection-and-attributes/)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

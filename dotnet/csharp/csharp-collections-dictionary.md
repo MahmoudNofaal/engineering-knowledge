@@ -1,22 +1,63 @@
-# C# Collections — Dictionary<TKey, TValue>
+# C# Collections — Dictionary\<TKey, TValue\>
 
-> `Dictionary<TKey, TValue>` is a hash table that maps unique keys to values, giving O(1) average-case lookup, insert, and delete by key.
+> A hash table that maps unique keys to values — O(1) average lookup, insert, and delete by key. The go-to structure whenever you need to find something by a key rather than by position.
+
+---
+
+## Quick Reference
+
+| Operation | Average | Worst case |
+|---|---|---|
+| `Add` / `this[key] =` | O(1) | O(n) — all keys collide |
+| `TryGetValue` / `this[key]` | O(1) | O(n) |
+| `Remove` | O(1) | O(n) |
+| `ContainsKey` | O(1) | O(n) |
+| `Count` | O(1) | — |
+| Iteration | O(n) | — |
 
 ---
 
 ## When To Use It
-Use a dictionary when you need to find, add, or remove items by a key rather than by position. The canonical cases are caches, lookup tables, grouping data by category, and counting occurrences. Don't use it when you just need an ordered sequence — that's `List<T>`. Don't use it when you only care about whether a value exists with no associated data — that's `HashSet<T>`, which is faster and uses less memory for membership checks.
+
+Use a dictionary when you need to find, add, or remove items by a key rather than by position. The canonical cases: caches, lookup tables, grouping data by category, counting occurrences, mapping IDs to objects.
+
+Don't use it when you just need an ordered sequence (`List<T>`), or when you only care about whether a value exists with no associated data (`HashSet<T>`).
 
 ---
 
 ## Core Concept
-A dictionary is a hash table under the hood. When you insert a key, it runs `GetHashCode()` on the key to compute a bucket index, then stores the key-value pair in that bucket. On lookup, it hashes the key again to find the right bucket, then uses `Equals` to confirm the match within the bucket. When too many items land in the same bucket (a collision), lookup degrades — but a good hash function keeps collisions rare and average case stays O(1). The entire contract depends on two rules: keys must be unique, and a key's hash code must not change while it's in the dictionary.
+
+A dictionary is a hash table. On insert, it runs `GetHashCode()` on the key to compute a bucket index, then stores the key-value pair in that bucket. On lookup, it hashes the key again to find the right bucket, then uses `Equals` to confirm the match within the bucket.
+
+The entire contract depends on two rules:
+1. **Keys must be unique** — adding a duplicate key throws (or overwrites with the indexer)
+2. **A key's hash code must not change while it's in the dictionary** — mutable keys that change their hash break lookups silently
+
+---
+
+## Version History
+
+| C# Version | .NET Version | What changed |
+|---|---|---|
+| C# 2.0 | .NET 2.0 | `Dictionary<K,V>` introduced (replaced `Hashtable`) |
+| C# 3.0 | .NET 3.5 | Collection initializer: `new Dictionary<K,V> { {"a", 1} }` |
+| C# 6.0 | .NET 4.6 | Index initializer: `new Dictionary<K,V> { ["a"] = 1 }` |
+| .NET Core 2.0 | — | `GetValueOrDefault` extension |
+| .NET 6 | — | `TryAdd` on the instance itself |
+
+---
+
+## Performance
+
+**Allocation behaviour:** One backing array allocation. Growing triggers rehash of all entries. Pre-sizing with `new Dictionary<K,V>(capacity)` prevents intermediate rehashes for large known sets.
+
+**Load factor:** The dictionary rehashes when the load factor (entries/buckets) exceeds a threshold (~0.72). A good hash function keeps collisions rare and average case stays O(1). A pathological hash function (all keys return the same hash) degrades to O(n) for every operation.
 
 ---
 
 ## The Code
 
-**Basic operations**
+**Basic operations and safe access**
 ```csharp
 var scores = new Dictionary<string, int>
 {
@@ -24,124 +65,157 @@ var scores = new Dictionary<string, int>
     ["Bob"]   = 82
 };
 
-scores["Charlie"] = 74;           // add new key
-scores["Alice"] = 97;             // update existing key
+scores["Charlie"] = 74;   // add new key
+scores["Alice"]   = 97;   // update existing key
 
-Console.WriteLine(scores["Alice"]);   // 97 — O(1) lookup
-Console.WriteLine(scores.Count);      // 3
+Console.WriteLine(scores["Alice"]);         // 97
+Console.WriteLine(scores.ContainsKey("Bob")); // true
+scores.Remove("Bob");
 
-scores.Remove("Bob");                 // O(1) remove
-Console.WriteLine(scores.ContainsKey("Bob")); // False
-```
-
-**Safe access — avoiding `KeyNotFoundException`**
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["host"] = "localhost",
-    ["port"] = "5432"
-};
-
-// UNSAFE — throws KeyNotFoundException if key missing
-string host = config["host"];
-
-// SAFE — returns false, doesn't throw
-if (config.TryGetValue("timeout", out string? timeout))
-    Console.WriteLine($"Timeout: {timeout}");
+// SAFE: TryGetValue — never throws on missing key
+if (scores.TryGetValue("Alice", out int score))
+    Console.WriteLine($"Score: {score}");
 else
-    Console.WriteLine("timeout not set");
+    Console.WriteLine("Not found");
 
-// Default if missing — using GetValueOrDefault (C# 7.4+)
-string port = config.GetValueOrDefault("port", "3306");
+// Default if missing
+int val = scores.GetValueOrDefault("Dave", -1); // -1 if not found
 ```
 
-**Iterating**
-```csharp
-var wordCount = new Dictionary<string, int>
-{
-    ["the"] = 42, ["quick"] = 7, ["brown"] = 3
-};
-
-// Iterate key-value pairs
-foreach (var (word, count) in wordCount)
-    Console.WriteLine($"{word}: {count}");
-
-// Keys and values separately
-foreach (string word in wordCount.Keys)
-    Console.WriteLine(word);
-
-foreach (int count in wordCount.Values)
-    Console.WriteLine(count);
-```
-
-**Counting occurrences — common pattern**
+**Counting occurrences — idiomatic pattern**
 ```csharp
 string[] words = { "apple", "banana", "apple", "cherry", "banana", "apple" };
 
 var counts = new Dictionary<string, int>();
+foreach (var word in words)
+    counts[word] = counts.GetValueOrDefault(word) + 1;
 
+// Or with TryGetValue for a single lookup per word
 foreach (var word in words)
 {
-    // TryGetValue avoids double-lookup vs ContainsKey + indexer
     if (counts.TryGetValue(word, out int current))
         counts[word] = current + 1;
     else
         counts[word] = 1;
 }
+```
 
-// Modern shorthand with GetValueOrDefault
-foreach (var word in words)
-    counts[word] = counts.GetValueOrDefault(word) + 1;
+**Iteration**
+```csharp
+foreach (var (key, value) in scores)    // deconstruct KeyValuePair
+    Console.WriteLine($"{key}: {value}");
+
+foreach (string key in scores.Keys)     // keys only
+    Console.WriteLine(key);
+
+foreach (int val in scores.Values)     // values only
+    Console.WriteLine(val);
 ```
 
 **`ConcurrentDictionary` for thread-safe scenarios**
 ```csharp
 var cache = new ConcurrentDictionary<int, string>();
 
-cache.TryAdd(1, "one");
+// GetOrAdd is atomic — only calls factory if key missing
+string v = cache.GetOrAdd(1, key => $"computed_{key}");
 
-// GetOrAdd is atomic — only calls the factory if key is missing
-string val = cache.GetOrAdd(2, key => $"computed_{key}");
-
-// AddOrUpdate — read-modify-write in one call
+// AddOrUpdate — atomic read-modify-write
 cache.AddOrUpdate(
     key: 1,
-    addValue: "one",
-    updateValueFactory: (key, existing) => existing + "_updated"
-);
+    addValue: "new",
+    updateValueFactory: (key, existing) => existing + "_updated");
+
+cache.TryRemove(1, out _);
 ```
+
+---
+
+## Real World Example
+
+An order lookup service builds an in-memory index from a database load. A dictionary enables O(1) lookup by order ID while an inverted index supports customer lookups.
+
+```csharp
+public class OrderIndex
+{
+    private readonly Dictionary<Guid, Order> _byId;
+    private readonly Dictionary<string, List<Order>> _byCustomer;
+
+    public OrderIndex(IEnumerable<Order> orders)
+    {
+        var list = orders.ToList();
+        _byId       = new Dictionary<Guid, Order>(list.Count);
+        _byCustomer = new Dictionary<string, List<Order>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var order in list)
+        {
+            _byId[order.Id] = order;
+
+            if (!_byCustomer.TryGetValue(order.CustomerEmail, out var customerOrders))
+            {
+                customerOrders = new List<Order>();
+                _byCustomer[order.CustomerEmail] = customerOrders;
+            }
+            customerOrders.Add(order);
+        }
+    }
+
+    public Order? Find(Guid id)
+        => _byId.GetValueOrDefault(id);
+
+    public IReadOnlyList<Order> FindByCustomer(string email)
+        => _byCustomer.TryGetValue(email, out var orders)
+            ? orders.AsReadOnly()
+            : Array.Empty<Order>();
+}
+```
+
+*The key insight: `_byCustomer` uses `StringComparer.OrdinalIgnoreCase` so `"alice@example.com"` and `"Alice@Example.COM"` resolve to the same bucket. The dictionary constructor accepts a custom `IEqualityComparer<TKey>` precisely for this use case.*
+
+---
+
+## Common Misconceptions
+
+**"Iteration order is insertion order"**
+`Dictionary<K,V>` makes no guarantee about enumeration order. It's determined by bucket layout, which depends on hash values and capacity. Use `SortedDictionary<K,V>` for sorted key order, or `List<KeyValuePair<K,V>>` with a sort if you need insertion order (or just use a `List<T>` of tuples).
+
+**"`ContainsKey` followed by indexer is safe"**
+It's correct but inefficient — two hash lookups. Use `TryGetValue` to get the value in one lookup: `if (dict.TryGetValue(key, out var val)) Use(val);`.
 
 ---
 
 ## Gotchas
 
-- **Using a mutable object as a key is a silent disaster.** If you insert a key and then mutate it in a way that changes its `GetHashCode()`, the dictionary will look in the wrong bucket on the next lookup and return nothing — no exception, just `false` from `ContainsKey`. Strings and value types are safe because they're either immutable or hash by value. Custom classes used as keys must have stable, immutable hash inputs.
-- **`dictionary[key]` throws `KeyNotFoundException` — not `null`, not `-1`.** Every beginner gets this once. The exception message includes the key type but not the key value, which makes debugging harder. Use `TryGetValue` by default unless you're certain the key exists and want an error if it doesn't.
-- **Iteration order is not insertion order.** `Dictionary<TKey, TValue>` makes no guarantees about enumeration order. If order matters, use `SortedDictionary<TKey, TValue>` (O(log n) operations, sorted by key) or `List<KeyValuePair<K,V>>` with a sort. An informal observation that iteration tends to follow insertion order in practice is an implementation detail, not a contract — don't rely on it.
-- **`ContainsKey` followed by indexer is a double-lookup.** `if (dict.ContainsKey(k)) return dict[k]` hashes the key twice. `TryGetValue` does it once. In tight loops over large dictionaries this is a measurable difference.
-- **Default initial capacity is 0 and growth causes rehashing.** When the load factor threshold is exceeded, the dictionary allocates a larger internal array and re-inserts every existing entry. If you know you'll be inserting ~10,000 items, `new Dictionary<K,V>(10000)` avoids several intermediate rehashes and is meaningfully faster for bulk inserts.
+- **`dictionary[key]` throws `KeyNotFoundException`, not returns null.** Always use `TryGetValue` or `GetValueOrDefault` for keys that might be absent.
+- **Mutable objects as keys are a silent disaster.** If you insert a key then mutate it (changing its `GetHashCode()`), the dictionary looks in the wrong bucket on the next lookup. Strings and value types are safe; custom classes used as keys need stable, immutable hash inputs.
+- **`ContainsKey` then indexer is a double-lookup.** Use `TryGetValue` — it does one lookup.
+- **Default initial capacity triggers multiple resizes.** If you know you'll insert ~10,000 items, `new Dictionary<K,V>(10000)` avoids several intermediate rehashes.
 
 ---
 
 ## Interview Angle
-**What they're really testing:** Whether you understand hash table mechanics — how keys map to buckets, what makes a good key, and what breaks O(1) performance.
 
-**Common question form:** "How does a dictionary work internally?" or "What are the requirements for a dictionary key?" or "What's the time complexity of a dictionary lookup?"
+**What they're really testing:** Whether you understand hash table mechanics — how keys map to buckets, what makes a good key, what breaks O(1) performance.
 
-**The depth signal:** A junior says "lookup is O(1) because it uses a hash." A senior explains the full picture: `GetHashCode()` maps the key to a bucket, `Equals` confirms the match within the bucket, and O(1) is an average case — worst case is O(n) when all keys collide into one bucket. They'll explain why mutable keys are dangerous (hash changes, wrong bucket), articulate the `Equals`/`GetHashCode` contract (equal objects must have equal hashes), and know that `ConcurrentDictionary` exists for thread safety but comes with its own atomicity gotchas — `GetOrAdd`'s factory can be called multiple times under contention even though only one value is stored.
+**Common question forms:**
+- "How does a dictionary work internally?"
+- "What are the requirements for a dictionary key?"
+- "What's the time complexity of a dictionary lookup?"
+
+**The depth signal:** A senior explains the full picture: `GetHashCode()` maps the key to a bucket, `Equals` confirms the match within the bucket, O(1) is average case — worst case is O(n) when all keys collide. They explain why mutable keys are dangerous, articulate the `Equals`/`GetHashCode` contract, and know that `ConcurrentDictionary.GetOrAdd`'s factory can run multiple times under contention.
 
 ---
 
 ## Related Topics
-- [[dotnet/csharp-object-class.md]] — `Equals` and `GetHashCode` on `object` are the exact methods the dictionary depends on for every key operation.
-- [[dotnet/csharp-collections-hashset.md]] — `HashSet<T>` is essentially a dictionary with no values; same hash table mechanics, less memory, for membership-only use cases.
-- [[dotnet/csharp-collections-list.md]] — The ordered-by-position counterpart; understanding when to use each is a core data structure decision.
-- [[dotnet/csharp-linq.md]] — LINQ's `GroupBy`, `ToDictionary`, and `ToLookup` all produce dictionary-like structures; they're built on the same key-hashing model.
+
+- [[dotnet/csharp/csharp-object-class.md]] — `Equals` and `GetHashCode` on `object` are the exact methods the dictionary depends on
+- [[dotnet/csharp/csharp-collections-hashset.md]] — `HashSet<T>` is a dictionary with no values; same mechanics, less memory
+- [[dotnet/csharp/csharp-concurrent-collections.md]] — `ConcurrentDictionary` for thread-safe scenarios
 
 ---
 
 ## Source
-[https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2](https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2)
+
+[Dictionary\<K,V\> — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

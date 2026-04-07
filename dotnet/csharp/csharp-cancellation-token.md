@@ -1,119 +1,141 @@
 # C# CancellationToken
 
-> A struct that carries a cancellation signal from a `CancellationTokenSource` into async methods, letting you stop long-running work cooperatively.
+> A struct that carries a cancellation signal through async and synchronous call chains — cooperative, one-way, and propagated via `CancellationTokenSource`.
+
+---
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Create** | `new CancellationTokenSource()` |
+| **Cancel** | `cts.Cancel()` or `cts.CancelAfter(timeout)` |
+| **Pass** | `cts.Token` — a `CancellationToken` struct |
+| **Check** | `ct.ThrowIfCancellationRequested()` or `ct.IsCancellationRequested` |
+| **Default** | `CancellationToken.None` — never cancelled |
+| **C# version** | .NET 4.0 (C# 4.0) |
 
 ---
 
 ## When To Use It
 
-Use it any time an operation could outlive the caller's interest in the result — HTTP request handlers, background jobs, database queries, file I/O, or any loop that shouldn't run forever. The token lets the caller say "stop when you can" without killing a thread.
+Accept a `CancellationToken` in every async method. Pass it to every awaited method and every long-running loop. This gives callers the ability to cancel the operation cleanly — HTTP request timeout, user pressing Cancel, application shutdown via `IHostApplicationLifetime`.
 
-Do not use it for exceptions or error handling — cancellation means "the caller no longer wants this result," not "something went wrong." Don't create a `CancellationTokenSource` just to immediately cancel it; that's a code smell for logic that belongs in a plain `if` statement.
+Don't create `CancellationTokenSource` for a token you receive — that's the caller's responsibility. Your method only reads the token, it doesn't control it.
 
 ---
 
 ## Core Concept
 
-There are two separate objects. The `CancellationTokenSource` is the sender — it owns the signal and calls `.Cancel()`. The `CancellationToken` is the receiver — it's a lightweight struct you pass into every method that needs to respect the cancellation. The source and token are linked; when you cancel the source, the token's `IsCancellationRequested` flips to `true` and any registered callbacks fire. The key word is *cooperative* — nothing stops forcefully. The method receiving the token has to actually check it. The runtime won't kill the operation for you.
+`CancellationTokenSource` owns the signal and provides `Cancel()`. `CancellationToken` is a read-only view of that signal — passed to methods so they can observe and react to cancellation.
+
+Cancellation is **cooperative**: the cancellation signal fires, and methods check it at convenient points using `ThrowIfCancellationRequested()`. Nothing is forcibly interrupted. A long-running loop without a check is uncancellable regardless of how many times you call `cts.Cancel()`.
+
+When cancelled, methods should propagate `OperationCanceledException` (or `TaskCanceledException`) upward — not swallow it — unless they're the top-level handler cleaning up.
 
 ---
 
 ## The Code
+
+**Accept and propagate — the standard pattern**
 ```csharp
-// --- Basic: create source, pass token, cancel from outside ---
-var cts = new CancellationTokenSource();
-CancellationToken token = cts.Token;
-
-Task work = DoWorkAsync(token);
-await Task.Delay(2000);
-cts.Cancel(); // signal the operation to stop
-
-await work; // will throw OperationCanceledException if cancelled mid-flight
-
-async Task DoWorkAsync(CancellationToken ct)
+public async Task<Order?> GetOrderAsync(int id, CancellationToken ct = default)
 {
-    for (int i = 0; i < 100; i++)
+    return await dbContext.Orders
+        .Where(o => o.Id == id)
+        .FirstOrDefaultAsync(ct); // pass ct — EF Core will cancel the DB query
+}
+
+public async Task ProcessOrdersAsync(IEnumerable<int> ids, CancellationToken ct)
+{
+    foreach (int id in ids)
     {
-        ct.ThrowIfCancellationRequested(); // throws if .Cancel() was called
-        await Task.Delay(100, ct);         // also respects cancellation
+        ct.ThrowIfCancellationRequested(); // cooperative check between iterations
+        var order = await GetOrderAsync(id, ct);
+        await ProcessAsync(order, ct);
     }
 }
+```
 
-// --- Timeout: auto-cancel after a duration ---
-using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-try
+**`CancellationTokenSource` — timeout and composite**
+```csharp
+// Timeout
+using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+await DoWorkAsync(cts.Token);
+
+// Linked: cancel if EITHER the user cancels OR the timeout fires
+using var linked = CancellationTokenSource.CreateLinkedTokenSource(userToken, timeoutToken);
+await DoWorkAsync(linked.Token);
+```
+
+**Register a callback — clean up resources on cancellation**
+```csharp
+ct.Register(() => Console.WriteLine("Cancellation requested!"));
+
+// More useful: signal a non-awaitable blocking operation
+var tcs = new TaskCompletionSource<bool>();
+ct.Register(() => tcs.TrySetCanceled(ct));
+await tcs.Task; // unblocks when ct is cancelled
+```
+
+**Handling `OperationCanceledException`**
+```csharp
+async Task RunAsync(CancellationToken ct)
 {
-    string result = await FetchDataAsync(cts.Token);
-}
-catch (OperationCanceledException)
-{
-    Console.WriteLine("Timed out or cancelled");
-}
-
-// --- Linked tokens: combine user cancel + timeout into one token ---
-using var userCts  = new CancellationTokenSource();          // e.g. from HTTP request
-using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-    userCts.Token, timeoutCts.Token);
-
-await ProcessAsync(linked.Token); // fires if EITHER source cancels
-
-// --- CPU-bound loop: poll instead of throw ---
-async Task ProcessLargeFileAsync(CancellationToken ct)
-{
-    foreach (var chunk in ReadChunks())
+    try
     {
-        if (ct.IsCancellationRequested)
-        {
-            // clean up before exiting
-            break;
-        }
-        Process(chunk);
+        await LongRunningAsync(ct);
+    }
+    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+    {
+        // Clean cancellation — expected, log at debug, don't re-throw to user
+        logger.LogDebug("Operation cancelled");
+    }
+    // Other exceptions propagate normally
+}
+```
+
+---
+
+## Real World Example
+
+An ASP.NET Core endpoint cancels its database query and downstream calls when the HTTP request is aborted (client disconnects).
+
+```csharp
+[HttpGet("{id}")]
+public async Task<IActionResult> GetOrderReport(int id, CancellationToken ct)
+{
+    // ct is automatically bound to the HTTP request lifetime by ASP.NET Core
+    try
+    {
+        var order   = await orderService.GetAsync(id, ct);
+        if (order is null) return NotFound();
+        var report  = await reportService.GenerateAsync(order, ct);
+        return Ok(report);
+    }
+    catch (OperationCanceledException)
+    {
+        // Client disconnected — no response needed
+        return StatusCode(499); // client closed request
     }
 }
-
-// --- Register a callback to run on cancellation ---
-using var cts = new CancellationTokenSource();
-cts.Token.Register(() =>
-{
-    Console.WriteLine("Cancelled! Releasing external resource.");
-});
 ```
 
 ---
 
 ## Gotchas
 
-- **`OperationCanceledException` must not be swallowed.** If your `catch` block catches `Exception` broadly and does nothing with it, cancelled operations silently succeed from the caller's perspective. Always check `ex.CancellationToken == token` or let it propagate.
-- **Passing `CancellationToken.None` is not the same as passing nothing.** `CancellationToken.None` can never be cancelled — it's the "don't support cancellation" sentinel. Swapping in `default` does the same thing. Both are fine intentionally, but passing them when you actually have a live token means your method will never stop.
-- **`Task.Delay(ms, token)` throws `OperationCanceledException` immediately when the token is already cancelled before the delay starts.** The delay doesn't run. This is usually what you want, but surprises people who expect it to "start the delay and then cancel."
-- **`CancellationTokenSource` is `IDisposable` and must be disposed.** If you use the timeout constructor (`new CancellationTokenSource(timeout)`), it registers a `Timer` internally. Failing to `Dispose` leaks that timer for the lifetime of the process.
-- **Linked sources must also be disposed.** `CreateLinkedTokenSource` registers callbacks on both parent tokens. Without `Dispose`, those registrations sit on the parent tokens until they're cancelled or GC'd — which in ASP.NET means for the lifetime of the request, piling up if requests are frequent.
-
----
-
-## Interview Angle
-
-**What they're really testing:** Whether you understand the cooperative cancellation model and its propagation contract — not just "pass the token in."
-
-**Common question form:** "How would you cancel an in-flight HTTP request if the user navigates away?" or "How do you make a long-running service respect shutdown signals in .NET?"
-
-**The depth signal:** A junior answers "pass `CancellationToken` to `HttpClient.GetAsync`." A senior adds: that the `IHostApplicationLifetime.ApplicationStopping` token should be linked with any per-request token using `CreateLinkedTokenSource` so the operation cancels on *either* event; that `OperationCanceledException` should propagate up rather than being swallowed; and that in background services, `ExecuteAsync` receives a `stoppingToken` that fires on `IHostedService.StopAsync` — if you ignore it and do `await Task.Delay(Timeout.Infinite)`, the host shutdown will hang for its configured timeout before force-killing the process.
-
----
-
-## Related Topics
-
-- [[dotnet/csharp-task-parallel-library.md]] — `CancellationToken` is the primary way to stop `Task.Run`, `Parallel.For`, and `Task.WhenAll` chains; the two features are inseparable in production.
-- [[dotnet/async-await-internals.md]] — Understanding how `await` suspension points interact with token checks explains why `ThrowIfCancellationRequested` works where it does.
-- [[dotnet/hosted-services-background-tasks.md]] — `IHostedService.ExecuteAsync` receives `stoppingToken` directly; getting shutdown right depends on threading it through every awaited call.
-- [[dotnet/httpclient-patterns.md]] — `HttpClient` methods accept a token and abort the underlying socket; the correct pattern for request-scoped timeouts uses a linked source.
+- **`CancellationToken.None` is never cancelled.** Use it as a default when you have no token from the caller.
+- **`TaskCanceledException` is a subclass of `OperationCanceledException`.** Catch `OperationCanceledException` to handle both.
+- **Don't catch cancellation and continue.** If you catch `OperationCanceledException` and don't re-throw, the operation continues despite cancellation being requested. Only catch it for cleanup or if you're the top-level handler.
+- **`Register` callbacks run synchronously on the thread that calls `Cancel()`.** Keep them short and non-blocking.
+- **Dispose `CancellationTokenSource`.** It holds a `WaitHandle`. Always wrap in `using`.
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads](https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads)
+[Cancellation in managed threads — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*

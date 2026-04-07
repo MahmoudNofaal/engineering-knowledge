@@ -1,27 +1,51 @@
-# C# Collections — Queue & Stack
+# C# Collections — Queue\<T\> and Stack\<T\>
 
-> Queue and Stack are in-memory, ordered collections that enforce a specific access pattern: Queue gives you FIFO (first-in, first-out), Stack gives you LIFO (last-in, first-out).
+> Queue gives you FIFO (first-in, first-out) access; Stack gives you LIFO (last-in, first-out). Both are O(1) for their primary operations and enforce a specific access discipline.
+
+---
+
+## Quick Reference
+
+| | `Queue<T>` | `Stack<T>` |
+|---|---|---|
+| **Order** | FIFO | LIFO |
+| **Add** | `Enqueue` | `Push` |
+| **Remove** | `Dequeue` | `Pop` |
+| **Peek** | `Peek` | `Peek` |
+| **Safe variant** | `TryDequeue` | `TryPop` |
+| **Backing store** | Circular buffer | Array |
+| **Use for** | BFS, task queues | DFS, undo/redo, call simulation |
 
 ---
 
 ## When To Use It
 
-Use `Queue<T>` when order of processing must match order of arrival — task schedulers, message buffers, BFS traversal. Use `Stack<T>` when you need to reverse or undo — expression parsing, call-stack simulation, DFS traversal, undo/redo history. Don't use either when you need arbitrary access by index; that's what `List<T>` is for. Don't use the non-generic `Queue` or `Stack` (from `System.Collections`) in new code — they're untyped and pre-generics legacy.
+Use `Queue<T>` when processing order must match arrival order — task schedulers, BFS traversal, message buffers. Use `Stack<T>` when you need LIFO — expression parsing, call-stack simulation, DFS traversal, undo/redo history.
+
+Don't use either when you need arbitrary index access — that's `List<T>`.
 
 ---
 
 ## Core Concept
 
-Both are wrappers around a linear sequence, but they only let you touch one end (or both ends in the case of Queue). Stack is like a pile of plates — you add to the top, take from the top. Queue is like a line at a bank — you join at the back, leave from the front. The key insight: neither gives you random access. You're trading flexibility for guaranteed ordering semantics. Internally, `Stack<T>` is backed by an array (like `List<T>`), and `Queue<T>` uses a circular buffer — so both are O(1) amortized for their core operations.
+Both enforce a single access discipline at one end (or both ends for Queue). You're trading indexing flexibility for guaranteed ordering semantics. Internally, `Stack<T>` is an array (like `List<T>`) and `Queue<T>` is a circular buffer — both are O(1) amortised for their core operations.
+
+---
+
+## Version History
+
+| C# Version | .NET Version | What changed |
+|---|---|---|
+| C# 2.0 | .NET 2.0 | Generic `Queue<T>` and `Stack<T>` introduced |
+| .NET 6 | — | `PriorityQueue<TElement, TPriority>` added |
 
 ---
 
 ## The Code
 
-### Queue<T> — basic usage
+**Queue\<T\> — basic usage and BFS**
 ```csharp
 var queue = new Queue<string>();
-
 queue.Enqueue("first");
 queue.Enqueue("second");
 queue.Enqueue("third");
@@ -29,72 +53,97 @@ queue.Enqueue("third");
 Console.WriteLine(queue.Peek());    // "first" — looks without removing
 Console.WriteLine(queue.Dequeue()); // "first" — removes and returns
 Console.WriteLine(queue.Count);     // 2
-```
 
-### Queue<T> — safe dequeue with TryDequeue
-```csharp
-// Prefer TryDequeue in concurrent-ish code or when empty queue is possible
+// Safe dequeue — prefer in code where empty is possible
 if (queue.TryDequeue(out var item))
-{
     Console.WriteLine($"Processing: {item}");
-}
-else
+
+// BFS skeleton
+void Bfs(TreeNode root)
 {
-    Console.WriteLine("Queue was empty — nothing to process");
-}
-```
-
-### Stack<T> — basic usage
-```csharp
-var stack = new Stack<int>();
-
-stack.Push(1);
-stack.Push(2);
-stack.Push(3);
-
-Console.WriteLine(stack.Peek()); // 3 — top of stack, not removed
-Console.WriteLine(stack.Pop());  // 3 — removes and returns
-Console.WriteLine(stack.Count);  // 2
-```
-
-### Stack<T> — undo/redo pattern
-```csharp
-var undoStack = new Stack<string>();
-var redoStack = new Stack<string>();
-
-void DoAction(string action)
-{
-    undoStack.Push(action);
-    redoStack.Clear(); // new action invalidates redo history
-}
-
-void Undo()
-{
-    if (undoStack.TryPop(out var last))
-        redoStack.Push(last);
-}
-
-void Redo()
-{
-    if (redoStack.TryPop(out var action))
-        undoStack.Push(action);
-}
-```
-
-### Queue<T> — BFS skeleton
-```csharp
-void Bfs(Node root)
-{
-    var queue = new Queue<Node>();
+    var queue = new Queue<TreeNode>();
     queue.Enqueue(root);
-
     while (queue.Count > 0)
     {
         var current = queue.Dequeue();
         Console.WriteLine(current.Value);
-
         foreach (var child in current.Children)
             queue.Enqueue(child);
+    }
+}
+```
+
+**Stack\<T\> — basic usage and undo/redo**
+```csharp
+var stack = new Stack<int>();
+stack.Push(1); stack.Push(2); stack.Push(3);
+
+Console.WriteLine(stack.Peek()); // 3 — top, not removed
+Console.WriteLine(stack.Pop());  // 3 — removes and returns
+Console.WriteLine(stack.Count);  // 2
+
+// Undo/redo pattern
+var undoStack = new Stack<string>();
+var redoStack = new Stack<string>();
+
+void DoAction(string action) { undoStack.Push(action); redoStack.Clear(); }
+void Undo() { if (undoStack.TryPop(out var a)) redoStack.Push(a); }
+void Redo() { if (redoStack.TryPop(out var a)) undoStack.Push(a); }
+
+// Bracket matching — classic Stack use case
+bool IsBalanced(string expr)
+{
+    var stack = new Stack<char>();
+    foreach (char c in expr)
+    {
+        if (c is '(' or '[' or '{') stack.Push(c);
+        else if (c is ')' or ']' or '}')
+        {
+            if (stack.Count == 0) return false;
+            var top = stack.Pop();
+            if ((c == ')' && top != '(') || (c == ']' && top != '[') || (c == '}' && top != '{'))
+                return false;
+        }
+    }
+    return stack.Count == 0;
+}
+```
+
+**PriorityQueue\<TElement, TPriority\> (NET 6+)**
+```csharp
+// Min-heap by default — lowest priority value dequeues first
+var pq = new PriorityQueue<string, int>();
+pq.Enqueue("low",    3);
+pq.Enqueue("high",   1);
+pq.Enqueue("medium", 2);
+
+while (pq.TryDequeue(out var item, out int priority))
+    Console.WriteLine($"{priority}: {item}"); // 1: high, 2: medium, 3: low
+```
+
+---
+
+## Real World Example
+
+A job processor uses `Queue<T>` for fair FIFO scheduling plus a priority queue for urgent jobs.
+
+```csharp
+public class JobScheduler
+{
+    private readonly PriorityQueue<Job, int> _urgent = new();  // priority = urgency
+    private readonly Queue<Job> _normal = new();
+
+    public void Enqueue(Job job)
+    {
+        if (job.IsUrgent) _urgent.Enqueue(job, job.Priority);
+        else              _normal.Enqueue(job);
+    }
+
+    public Job? Dequeue()
+    {
+        // Urgent jobs first, then normal FIFO
+        if (_urgent.TryDequeue(out var urgent, out _)) return urgent;
+        return _normal.TryDequeue(out var normal) ? normal : null;
     }
 }
 ```
@@ -103,11 +152,10 @@ void Bfs(Node root)
 
 ## Gotchas
 
-- **`Dequeue()` and `Pop()` throw on empty** — `InvalidOperationException`. Always check `Count > 0` or use the `Try*` variants (`TryDequeue`, `TryPop`) to avoid this in production code.
-- **Neither is thread-safe** — `Queue<T>` and `Stack<T>` will corrupt silently under concurrent access. Use `ConcurrentQueue<T>` or `ConcurrentStack<T>` from `System.Collections.Concurrent` if multiple threads are involved.
-- **`Stack<T>` is backed by an array** — iterating it with `foreach` goes from top to bottom (LIFO order), not insertion order. This surprises people who assume it iterates the same way items were pushed.
-- **`Queue<T>` uses a circular buffer internally** — resizing happens when capacity is exceeded, which means occasional O(n) cost. Pre-size with `new Queue<T>(capacity)` if you know the upper bound.
-- **No index access** — you can't do `queue[2]`. If you're tempted to, you want a `List<T>` or `LinkedList<T>`, not a Queue or Stack.
+- **`Dequeue()` and `Pop()` throw `InvalidOperationException` on empty.** Always check `Count > 0` or use the `Try*` variants.
+- **Neither is thread-safe.** Use `ConcurrentQueue<T>` / `ConcurrentStack<T>` for multi-threaded access.
+- **`Stack<T>` iterates top-to-bottom** in `foreach` — not insertion order. Surprises people who assume FIFO enumeration.
+- **`PriorityQueue` doesn't support updating priorities.** To change a priority, remove-and-reinsert is not supported; maintain an external validity map if needed.
 
 ---
 
@@ -115,24 +163,25 @@ void Bfs(Node root)
 
 **What they're really testing:** Whether you understand access patterns and algorithmic constraints — not just API familiarity.
 
-**Common question form:** "Implement a browser history (back/forward)," "process tasks in order," or "check if a string of brackets is balanced."
+**Common question forms:**
+- "Implement browser back/forward navigation"
+- "Check if brackets are balanced"
+- "Process tasks in arrival order"
 
-**The depth signal:** A junior reaches for Stack or Queue because the problem says LIFO/FIFO. A senior explains *why* the access pattern maps to that structure — and knows when to swap in `ConcurrentQueue<T>` for producer-consumer scenarios, or `Channel<T>` (from `System.Threading.Channels`) when async throughput is needed. The senior also knows that `Stack<T>` iteration order surprises people and can explain why (array backing, index walks from top).
+**The depth signal:** A senior reaches for `ConcurrentQueue<T>` unprompted for producer/consumer, or `Channel<T>` for async pipelines, and knows `Stack<T>` enumeration goes top-to-bottom.
 
 ---
 
 ## Related Topics
 
-- [[algorithms/bfs-dfs.md]] — Queue drives BFS; Stack (or the call stack) drives DFS. Understanding why is foundational.
-- [[dotnet/csharp-collections-list-linkedlist.md]] — Covers the index-accessible counterparts; helps clarify when NOT to use Queue/Stack.
-- [[dotnet/concurrency-concurrent-collections.md]] — `ConcurrentQueue<T>` and `ConcurrentStack<T>` are the thread-safe versions; required reading before using these in async code.
-- [[dotnet/channels.md]] — `System.Threading.Channels` is the modern replacement for queue-based producer-consumer pipelines in async .NET.
+- [[dotnet/csharp/csharp-concurrent-collections.md]] — Thread-safe `ConcurrentQueue<T>` and `ConcurrentStack<T>`
+- [[dotnet/csharp/csharp-channels.md]] — `Channel<T>` for async producer/consumer pipelines
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1](https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1)
+[Queue\<T\> — Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1)
 
 ---
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-06*
