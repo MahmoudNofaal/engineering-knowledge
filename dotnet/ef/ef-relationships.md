@@ -20,28 +20,26 @@ A relationship in EF Core has three parts: two entity types, a foreign key colum
 
 **1. One-to-many — the most common relationship**
 ```csharp
-// Entities
 public class Category
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
-    public ICollection<Product> Products { get; set; } = []; // navigation
+    public ICollection<Product> Products { get; set; } = [];
 }
 
 public class Product
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
-    public int CategoryId { get; set; }           // foreign key property
-    public Category Category { get; set; } = null!; // navigation
+    public int CategoryId { get; set; }
+    public Category Category { get; set; } = null!;
 }
 
-// Fluent API configuration
 modelBuilder.Entity<Product>()
-    .HasOne(p => p.Category)       // Product has one Category
-    .WithMany(c => c.Products)     // Category has many Products
+    .HasOne(p => p.Category)
+    .WithMany(c => c.Products)
     .HasForeignKey(p => p.CategoryId)
-    .OnDelete(DeleteBehavior.Restrict); // don't cascade-delete products
+    .OnDelete(DeleteBehavior.Restrict); // never rely on cascade default
 ```
 
 **2. Many-to-many — without a payload (EF Core 5+)**
@@ -60,31 +58,27 @@ public class Course
     public ICollection<Student> Students { get; set; } = [];
 }
 
-// EF generates a hidden join table automatically
 modelBuilder.Entity<Student>()
     .HasMany(s => s.Courses)
     .WithMany(c => c.Students)
-    .UsingEntity(j => j.ToTable("StudentCourses")); // name the join table explicitly
+    .UsingEntity(j => j.ToTable("StudentCourses"));
 ```
 
 **3. Many-to-many — with a join entity carrying payload columns**
 ```csharp
-// When the join table has its own columns, model it explicitly
 public class Enrollment
 {
     public int StudentId { get; set; }
     public Student Student { get; set; } = null!;
-
     public int CourseId { get; set; }
     public Course Course { get; set; } = null!;
-
-    public DateTime EnrolledAt { get; set; }  // payload column
+    public DateTime EnrolledAt { get; set; }
     public string? Grade { get; set; }
 }
 
 modelBuilder.Entity<Enrollment>(entity =>
 {
-    entity.HasKey(e => new { e.StudentId, e.CourseId }); // composite PK
+    entity.HasKey(e => new { e.StudentId, e.CourseId });
 
     entity.HasOne(e => e.Student)
           .WithMany(s => s.Enrollments)
@@ -104,13 +98,13 @@ public class User
 {
     public int Id { get; set; }
     public string Email { get; set; } = string.Empty;
-    public UserProfile? Profile { get; set; } // optional navigation
+    public UserProfile? Profile { get; set; }
 }
 
 public class UserProfile
 {
     public int Id { get; set; }
-    public int UserId { get; set; }         // FK lives on the dependent side
+    public int UserId { get; set; }
     public User User { get; set; } = null!;
     public string? Bio { get; set; }
 }
@@ -122,13 +116,13 @@ modelBuilder.Entity<User>()
     .OnDelete(DeleteBehavior.Cascade);
 ```
 
-**5. Self-referencing relationship (e.g. category tree)**
+**5. Self-referencing relationship**
 ```csharp
 public class Category
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
-    public int? ParentId { get; set; }                      // nullable = root nodes have no parent
+    public int? ParentId { get; set; }
     public Category? Parent { get; set; }
     public ICollection<Category> Children { get; set; } = [];
 }
@@ -137,56 +131,165 @@ modelBuilder.Entity<Category>()
     .HasOne(c => c.Parent)
     .WithMany(c => c.Children)
     .HasForeignKey(c => c.ParentId)
-    .OnDelete(DeleteBehavior.Restrict); // cascade on self-ref causes SQL Server errors
+    .OnDelete(DeleteBehavior.Restrict); // cascade on self-ref causes SQL Server cycle errors
 ```
 
-**6. Querying with relationships**
+**6. Shadow properties — FK without a C# property**
 ```csharp
-// Eager loading — include related data in the same query
-var orders = await context.Orders
-    .Include(o => o.Items)
-        .ThenInclude(i => i.Product)  // chain for nested relationships
-    .Where(o => o.CustomerId == customerId)
-    .ToListAsync();
+// The FK column exists in the database but has no corresponding C# property
+// Useful when you want the FK on the dependent table without polluting the entity class
+public class Post
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    // No BlogId property — FK is a shadow property
+    public Blog Blog { get; set; } = null!;
+}
 
-// Filtered include (EF Core 5+) — load only non-cancelled items
-var orders = await context.Orders
-    .Include(o => o.Items.Where(i => !i.IsCancelled))
-    .ToListAsync();
+modelBuilder.Entity<Post>()
+    .HasOne(p => p.Blog)
+    .WithMany(b => b.Posts)
+    .HasForeignKey("BlogId")  // shadow property name — exists in DB, not in C#
+    .OnDelete(DeleteBehavior.Cascade);
 
-// Explicit loading — load navigation after the fact
+// Querying with shadow properties
+var posts = await context.Posts
+    .Where(p => EF.Property<int>(p, "BlogId") == blogId)
+    .ToListAsync();
+```
+
+**7. Alternate keys — unique constraints that act as FK targets**
+```csharp
+// A product has a unique SKU — other entities can FK to the SKU, not just the PK
+public class Product
+{
+    public int Id { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+}
+
+public class InventoryItem
+{
+    public int Id { get; set; }
+    public string ProductSku { get; set; } = string.Empty; // FK to alternate key
+    public Product Product { get; set; } = null!;
+    public int Stock { get; set; }
+}
+
+modelBuilder.Entity<Product>()
+    .HasAlternateKey(p => p.Sku); // creates UNIQUE constraint on Sku
+
+modelBuilder.Entity<InventoryItem>()
+    .HasOne(i => i.Product)
+    .WithMany()
+    .HasForeignKey(i => i.ProductSku)
+    .HasPrincipalKey(p => p.Sku); // FK points to the alternate key, not the PK
+```
+
+**8. Inheritance — TPH, TPT, TPC**
+```csharp
+// Base class
+public abstract class Animal
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+}
+
+public class Dog : Animal
+{
+    public string Breed { get; set; } = string.Empty;
+}
+
+public class Cat : Animal
+{
+    public bool IsIndoor { get; set; }
+}
+
+// TPH (Table-Per-Hierarchy) — EF Core default
+// Single table with a discriminator column — fastest queries, nullable columns for subtype props
+modelBuilder.Entity<Animal>().ToTable("Animals");
+// Generates: Animals table with Discriminator column ("Dog"/"Cat") + Breed (nullable) + IsIndoor (nullable)
+
+// TPT (Table-Per-Type) — separate table per type, joined on query
+modelBuilder.Entity<Animal>().UseTptMappingStrategy();
+// Generates: Animals(Id, Name), Dogs(Id FK, Breed), Cats(Id FK, IsIndoor)
+// Queries use JOINs — cleaner schema, slower reads
+
+// TPC (Table-Per-Concrete, EF Core 7+) — one table per concrete type, no shared table
+modelBuilder.Entity<Animal>().UseTpcMappingStrategy();
+// Generates: Dogs(Id, Name, Breed), Cats(Id, Name, IsIndoor)
+// No JOINs, no discriminator — fastest queries, but polymorphic queries need UNION ALL
+```
+
+**9. Lazy loading — opt-in, use with care**
+```csharp
+// Not enabled by default — requires installing Microsoft.EntityFrameworkCore.Proxies
+// and making navigation properties virtual
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(connStr)
+           .UseLazyLoadingProxies()); // installs proxy-based lazy loading
+
+public class Order
+{
+    public int Id { get; set; }
+    public virtual Customer Customer { get; set; } = null!; // must be virtual
+    public virtual ICollection<OrderItem> Items { get; set; } = [];
+}
+
+// With lazy loading — navigation properties auto-load on first access
 var order = await context.Orders.FindAsync(orderId);
-await context.Entry(order).Collection(o => o.Items).LoadAsync();
+var name = order.Customer.Name; // triggers SELECT FROM Customers WHERE Id = @p0
+
+// The danger: N+1 is now invisible — no Include() warning, just silent database calls
+foreach (var order in orders)
+    Console.WriteLine(order.Customer.Name); // N queries — no warning, no exception
+```
+
+**10. Eager loading**
+```csharp
+var orders = await context.Orders
+    .Include(o => o.Customer)
+    .Include(o => o.Items)
+        .ThenInclude(i => i.Product)
+    .Where(o => o.Status == OrderStatus.Pending)
+    .AsNoTracking()
+    .ToListAsync();
+
+// Filtered include — load only active items
+var orders = await context.Orders
+    .Include(o => o.Items.Where(i => i.IsActive))
+    .ToListAsync();
 ```
 
 ---
 
 ## Gotchas
 
-- **EF Core's default delete behaviour for required relationships is `Cascade` — not `Restrict`.** A required FK (non-nullable `CategoryId`) gets a `CASCADE` constraint in the migration unless you override it. On SQL Server, multiple cascade paths to the same table throw a schema error; on other databases they silently delete data you didn't intend to remove. Always set `OnDelete` explicitly for every relationship — never rely on the default.
-- **One-to-one requires `HasForeignKey<TDependent>()` to specify which side holds the FK.** EF Core can't infer this for one-to-one relationships the way it can for one-to-many. Omitting `HasForeignKey<UserProfile>` causes EF to guess, which sometimes puts the FK on the wrong table and generates a migration with an extra column on the principal entity.
-- **Self-referencing relationships with `DeleteBehavior.Cascade` fail on SQL Server.** SQL Server prohibits cascade paths that could loop (a category deleting its children which are also categories). The migration succeeds but `database update` throws `Introducing FOREIGN KEY constraint may cause cycles`. Always use `DeleteBehavior.Restrict` or `ClientCascade` for self-referencing entities and handle deletion logic manually.
-- **Many-to-many without a join entity class uses a hidden shared entity that you can't query directly.** If you later need to add a payload column to the join table (like `EnrolledAt`), you can't add it to the implicit join entity — you have to refactor to an explicit join entity class, which is a breaking migration that drops and recreates the join table. Model explicit join entities upfront if there's any chance the relationship will carry data.
-- **Navigation properties initialised to `null!` are not loaded automatically — they require `.Include()` or explicit loading.** Accessing `product.Category` without an `Include` on the query returns `null` for tracked entities (no lazy loading by default in EF Core) or triggers a `NullReferenceException`. Lazy loading is opt-in via `UseLazyLoadingProxies()` and requires virtual navigation properties — it's not enabled by default because it hides N+1 queries.
+- **EF Core's default delete behaviour for required relationships is `Cascade`.** If you define a required FK without `OnDelete`, EF generates a `CASCADE` constraint. On SQL Server, multiple cascade paths to the same table throw a schema error; on other databases they silently delete data you didn't intend to remove. Always set `OnDelete` explicitly.
+- **One-to-one requires `HasForeignKey<TDependent>()` to specify which side holds the FK.** EF Core can't infer this for one-to-one relationships. Omitting it causes EF to guess, sometimes putting the FK on the wrong table.
+- **Self-referencing relationships with `DeleteBehavior.Cascade` fail on SQL Server.** SQL Server prohibits cycle cascade paths. The migration succeeds but `database update` throws. Use `DeleteBehavior.Restrict` and handle deletion logic manually.
+- **Many-to-many without a join entity class can't have payload columns added later.** If you later need `EnrolledAt` on the join table, you can't add it to the implicit join entity — you must refactor to an explicit join entity class, which is a breaking migration.
+- **Lazy loading hides N+1 queries.** Every access to an unloaded navigation property inside a loop silently fires a new SELECT. There's no exception, no warning — just unexpectedly high database load. Turn on EF query logging and check for repeated single-row SELECTs to detect it.
+- **TPT inheritance uses JOINs on every query** — even loading `Dog` requires joining `Animals` and `Dogs`. For polymorphic queries over large tables, TPT can be significantly slower than TPH. Profile before choosing TPT for performance-sensitive paths.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you understand the principal/dependent distinction, the FK placement rules for one-to-one, cascade behaviour defaults, and the N+1 query problem that comes from misusing navigation properties.
+**What they're really testing:** Whether you understand the principal/dependent distinction, the FK placement rules for one-to-one, cascade behaviour defaults, and the N+1 query problem.
 
 **Common question form:** *"How do you configure a one-to-many relationship in EF Core?"* or *"What is the N+1 query problem and how does EF Core's Include solve it?"*
 
-**The depth signal:** A junior answer describes `HasOne`/`WithMany` and `Include`. A senior answer explains that EF Core's default cascade on required FKs is dangerous and must always be overridden explicitly, why one-to-one requires `HasForeignKey<TDependent>` (EF can't infer it), why lazy loading is off by default and why turning it on hides N+1 queries rather than fixing them, the difference between implicit and explicit many-to-many join entities and why you can't add payload columns to the implicit one, and why self-referencing cascades fail on SQL Server at migration time rather than at query time.
+**The depth signal:** A junior answer describes `HasOne`/`WithMany` and `Include`. A senior answer explains EF's cascade default and why it's dangerous, why one-to-one requires `HasForeignKey<TDependent>`, why lazy loading is off by default (it hides N+1 rather than fixing it), the difference between TPH/TPT/TPC and when each is appropriate, shadow properties for clean entities without FK pollution, alternate keys for non-PK FK relationships, and why implicit many-to-many join entities can't be extended with payload columns.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/ef-fluent-api.md]] — All relationship configuration is expressed through Fluent API; the `HasOne`/`WithMany`/`HasForeignKey`/`OnDelete` chain is Fluent API syntax.
-- [[dotnet/ef-querying.md]] — `Include`, `ThenInclude`, and filtered includes are how you load related data; relationship configuration determines what EF can join and how.
-- [[dotnet/ef-dbcontext.md]] — Navigation properties are tracked by the change tracker; understanding how the context tracks entities explains why accessing an unloaded navigation returns null rather than fetching it.
-- [[databases/foreign-keys-constraints.md]] — EF relationship configuration maps to FK constraints in the database; understanding DB-level cascade and restrict behaviour explains why EF's defaults matter so much.
+- [[dotnet/ef/ef-fluent-api.md]] — All relationship configuration is expressed through Fluent API; `HasOne`/`WithMany`/`HasForeignKey`/`OnDelete` is Fluent API syntax.
+- [[dotnet/ef/ef-queries.md]] — `Include`, `ThenInclude`, and filtered includes are how you load related data; relationship configuration determines what EF can join and how.
+- [[dotnet/ef/ef-inheritance.md]] — TPH, TPT, and TPC deserve their own deep-dive; this file introduces them, the inheritance file covers configuration and migration implications in depth.
+- [[dotnet/ef/ef-dbcontext.md]] — Navigation properties are tracked by the change tracker; understanding how the context tracks entities explains why accessing an unloaded navigation returns null.
 
 ---
 
@@ -195,4 +298,4 @@ await context.Entry(order).Collection(o => o.Items).LoadAsync();
 https://learn.microsoft.com/en-us/ef/core/modeling/relationships
 
 ---
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-08*

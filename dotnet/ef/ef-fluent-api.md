@@ -6,13 +6,13 @@
 
 ## When To Use It
 
-Use Fluent API whenever data annotations aren't expressive enough — composite keys, table splitting, owned types, delete behaviour, column types, unique indexes, and any relationship with non-obvious foreign keys all require it. Prefer Fluent API over data annotations for anything beyond basic `[Required]` and `[MaxLength]` — it keeps entity classes free of infrastructure concerns and centralises all schema decisions in one place. Don't mix both heavily for the same property; when Fluent API and a data annotation conflict, Fluent API wins, which creates confusing double-configuration that's hard to audit.
+Use Fluent API whenever data annotations aren't expressive enough — composite keys, table splitting, owned types, delete behaviour, column types, unique indexes, value converters, and any relationship with non-obvious foreign keys all require it. Prefer Fluent API over data annotations for anything beyond basic `[Required]` and `[MaxLength]` — it keeps entity classes free of infrastructure concerns and centralises all schema decisions in one place. Don't mix both heavily for the same property; when Fluent API and a data annotation conflict, Fluent API wins, which creates confusing double-configuration.
 
 ---
 
 ## Core Concept
 
-Fluent API lives entirely in `DbContext.OnModelCreating(ModelBuilder modelBuilder)`. You call `modelBuilder.Entity<T>()` to get a builder for an entity, then chain methods to describe its table name, primary key, column types, required/optional constraints, indexes, and relationships. Nothing here runs at runtime — it's all read once at startup to build EF Core's internal model, which then drives both query generation and migration output. The key insight is that Fluent API is the authoritative layer: whatever you configure here overrides conventions and annotations. This makes it the right place for anything production-critical like delete behaviour, precision of `decimal` columns, and unique constraints — things where EF's defaults would silently produce the wrong schema.
+Fluent API lives entirely in `DbContext.OnModelCreating(ModelBuilder modelBuilder)`. You call `modelBuilder.Entity<T>()` to get a builder for an entity, then chain methods to describe its table name, primary key, column types, required/optional constraints, indexes, and relationships. Nothing here runs at runtime — it's all read once at startup to build EF Core's internal model, which then drives both query generation and migration output. Whatever you configure here overrides conventions and annotations — this makes it the right place for production-critical decisions like delete behaviour, decimal precision, value converters, and JSON column mapping.
 
 ---
 
@@ -24,24 +24,22 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     modelBuilder.Entity<Product>(entity =>
     {
-        entity.ToTable("Products", schema: "catalogue"); // custom schema
-
+        entity.ToTable("Products", schema: "catalogue");
         entity.HasKey(p => p.Id);
 
         entity.Property(p => p.Name)
               .IsRequired()
               .HasMaxLength(200)
-              .HasColumnName("ProductName"); // column name differs from property name
+              .HasColumnName("ProductName");
 
-        // decimal precision must always be set explicitly — default is (18,2) on SQL Server
-        // but varies by provider; never rely on convention for money columns
+        // decimal precision must always be set — default varies by provider
         entity.Property(p => p.Price)
               .HasColumnType("decimal(18,2)")
               .HasDefaultValue(0m);
 
         entity.Property(p => p.CreatedAt)
-              .HasDefaultValueSql("GETUTCDATE()") // DB-generated default
-              .ValueGeneratedOnAdd();             // EF won't try to insert this
+              .HasDefaultValueSql("GETUTCDATE()")
+              .ValueGeneratedOnAdd();
 
         entity.Property(p => p.RowVersion)
               .IsRowVersion(); // optimistic concurrency token
@@ -51,39 +49,37 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 
 **2. Composite primary key**
 ```csharp
-// EF convention can't infer composite keys — Fluent API is required
 modelBuilder.Entity<OrderItem>(entity =>
 {
-    entity.HasKey(oi => new { oi.OrderId, oi.ProductId }); // composite PK
-
+    entity.HasKey(oi => new { oi.OrderId, oi.ProductId });
     entity.Property(oi => oi.Quantity).IsRequired();
     entity.Property(oi => oi.UnitPrice).HasColumnType("decimal(18,2)");
 });
 ```
 
-**3. Relationships — one-to-many, many-to-many, one-to-one**
+**3. Relationships**
 ```csharp
-// One-to-many: Order has many OrderItems
+// One-to-many
 modelBuilder.Entity<OrderItem>(entity =>
 {
     entity.HasOne(oi => oi.Order)
           .WithMany(o => o.Items)
           .HasForeignKey(oi => oi.OrderId)
-          .OnDelete(DeleteBehavior.Cascade); // deleting an order deletes its items
+          .OnDelete(DeleteBehavior.Cascade);
 
     entity.HasOne(oi => oi.Product)
-          .WithMany()                        // Product has no navigation back to OrderItems
+          .WithMany()
           .HasForeignKey(oi => oi.ProductId)
-          .OnDelete(DeleteBehavior.Restrict); // prevent accidental product deletion
+          .OnDelete(DeleteBehavior.Restrict);
 });
 
-// Many-to-many: Student ↔ Course (EF Core 5+ — no join entity class required)
+// Many-to-many (EF Core 5+)
 modelBuilder.Entity<Student>()
     .HasMany(s => s.Courses)
     .WithMany(c => c.Students)
-    .UsingEntity(j => j.ToTable("StudentCourses")); // explicit join table name
+    .UsingEntity(j => j.ToTable("StudentCourses"));
 
-// One-to-one: User has one UserProfile
+// One-to-one
 modelBuilder.Entity<User>()
     .HasOne(u => u.Profile)
     .WithOne(p => p.User)
@@ -95,40 +91,133 @@ modelBuilder.Entity<User>()
 ```csharp
 modelBuilder.Entity<Product>(entity =>
 {
-    // Simple index — speeds up queries filtering by CategoryId
-    entity.HasIndex(p => p.CategoryId);
+    entity.HasIndex(p => p.CategoryId);                  // simple index
 
-    // Unique index — database-enforced uniqueness
     entity.HasIndex(p => p.Sku)
           .IsUnique()
-          .HasDatabaseName("IX_Products_Sku");
+          .HasDatabaseName("IX_Products_Sku");          // unique index
 
-    // Composite unique index — combination must be unique
     entity.HasIndex(p => new { p.Name, p.CategoryId })
-          .IsUnique();
+          .IsUnique();                                   // composite unique
 
-    // Filtered index — only index active products (SQL Server syntax)
     entity.HasIndex(p => p.Name)
-          .HasFilter("[IsActive] = 1");
+          .HasFilter("[IsActive] = 1");                  // filtered index (SQL Server)
 });
 ```
 
-**5. Owned types — value objects embedded in the same table**
+**5. Value converters — transform how a property is stored**
 ```csharp
-// Address is not its own table — it's columns in the Orders table
+// Enum stored as string in the database — readable in DB tools, survives reordering
+modelBuilder.Entity<Order>()
+    .Property(o => o.Status)
+    .HasConversion<string>()            // stores "Pending", "Confirmed", "Shipped"
+    .HasMaxLength(50);
+
+// Custom converter — store a strongly-typed value object as a primitive
+public record ProductCode(string Value);
+
+modelBuilder.Entity<Product>()
+    .Property(p => p.Code)
+    .HasConversion(
+        code => code.Value,             // C# → DB: extract the string
+        value => new ProductCode(value) // DB → C#: reconstruct the value object
+    )
+    .HasMaxLength(20);
+
+// Encrypted column — store sensitive data encrypted, decrypt on read
+modelBuilder.Entity<Customer>()
+    .Property(c => c.TaxId)
+    .HasConversion(
+        plain  => EncryptionService.Encrypt(plain),
+        cipher => EncryptionService.Decrypt(cipher)
+    );
+
+// Global value converter — apply to every property of a type across all entities
+// Useful for applying value object pattern uniformly
+modelBuilder.Properties<ProductCode>()
+    .HaveConversion<ProductCodeConverter>(); // custom IValueConverter<ProductCode, string>
+```
+
+**6. JSON columns — EF Core 7+**
+```csharp
+// Stores owned type as a single JSON column — great for complex value objects
+public class Customer
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public ContactInfo ContactInfo { get; set; } = new();
+}
+
+public class ContactInfo
+{
+    public string         Email   { get; set; } = string.Empty;
+    public string?        Phone   { get; set; }
+    public List<string>   Tags    { get; set; } = [];
+}
+
+modelBuilder.Entity<Customer>().OwnsOne(c => c.ContactInfo, ci =>
+{
+    ci.ToJson(); // stored as: {"Email":"...","Phone":"...","Tags":["vip","retail"]}
+});
+
+// EF Core 8+ — query into JSON properties
+var customers = await context.Customers
+    .Where(c => c.ContactInfo.Email.Contains("@example.com"))
+    .ToListAsync();
+// Generates: WHERE JSON_VALUE(ContactInfo, '$.Email') LIKE '%@example.com%'
+```
+
+**7. Inheritance — TPH, TPT, TPC**
+```csharp
+// TPH (default) — single table with discriminator column
+modelBuilder.Entity<Animal>(entity =>
+{
+    entity.HasDiscriminator<string>("AnimalType")
+          .HasValue<Dog>("Dog")
+          .HasValue<Cat>("Cat");
+});
+
+// TPT — separate table per type
+modelBuilder.Entity<Animal>().UseTptMappingStrategy();
+
+// TPC — one table per concrete type (EF Core 7+)
+modelBuilder.Entity<Animal>().UseTpcMappingStrategy();
+```
+
+**8. Owned types**
+```csharp
 modelBuilder.Entity<Order>()
     .OwnsOne(o => o.ShippingAddress, address =>
     {
         address.Property(a => a.Street).HasMaxLength(200).IsRequired();
         address.Property(a => a.City).HasMaxLength(100).IsRequired();
         address.Property(a => a.PostalCode).HasMaxLength(20);
-        // Generates columns: ShippingAddress_Street, ShippingAddress_City, etc.
+        // Columns: ShippingAddress_Street, ShippingAddress_City, ShippingAddress_PostalCode
     });
 ```
 
-**6. Split configuration into IEntityTypeConfiguration classes (keeps OnModelCreating clean)**
+**9. Pre-convention model configuration — apply rules across all entities**
 ```csharp
-// Configuration/ProductConfiguration.cs
+// EF Core 6+ — set defaults that apply to every entity unless overridden
+protected override void ConfigureConventions(ModelConfigurationBuilder configBuilder)
+{
+    // All string properties default to nvarchar(200) — prevents accidental nvarchar(max)
+    configBuilder.Properties<string>()
+        .HaveMaxLength(200);
+
+    // All DateTime properties stored as UTC
+    configBuilder.Properties<DateTime>()
+        .HaveConversion<UtcDateTimeConverter>();
+
+    // All decimal properties default to decimal(18,4)
+    configBuilder.Properties<decimal>()
+        .HaveColumnType("decimal(18,4)");
+}
+```
+
+**10. Split configuration into IEntityTypeConfiguration classes**
+```csharp
+// Configuration/ProductConfiguration.cs — keeps OnModelCreating clean
 public class ProductConfiguration : IEntityTypeConfiguration<Product>
 {
     public void Configure(EntityTypeBuilder<Product> builder)
@@ -137,10 +226,11 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.HasKey(p => p.Id);
         builder.Property(p => p.Name).IsRequired().HasMaxLength(200);
         builder.Property(p => p.Price).HasColumnType("decimal(18,2)");
+        builder.Property(p => p.Status).HasConversion<string>().HasMaxLength(50);
     }
 }
 
-// In DbContext — applies all IEntityTypeConfiguration implementations in the assembly
+// In DbContext — applies all IEntityTypeConfiguration<T> in the assembly at once
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
@@ -151,30 +241,31 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 
 ## Gotchas
 
-- **`OnDelete(DeleteBehavior.Cascade)` is EF Core's default for required relationships — it's not opt-in.** If you define a required foreign key without calling `OnDelete()`, EF generates a `CASCADE` constraint. On SQL Server, multiple cascade paths to the same table cause a schema error at migration time; on other databases it silently enables cascading deletes you didn't intend. Always set `OnDelete` explicitly for every relationship.
-- **`HasDefaultValueSql()` and `ValueGeneratedOnAdd()` tell EF not to send that column in `INSERT` statements — but EF still reads it back after insert.** If your database default returns a value (like `GETUTCDATE()`), EF re-queries the row to populate the property. This is an extra round-trip. If you set `HasDefaultValueSql` without `ValueGeneratedOnAdd`, EF sends `null` in the INSERT and the default never fires.
-- **Fluent API configuration in `OnModelCreating` is only read once at startup.** If you add `ApplyConfigurationsFromAssembly` but your configuration class is in a different assembly, it won't be found — no error, just silently missing configuration. The resulting migration will use EF conventions instead, which may produce wrong column types or missing constraints.
-- **`OwnsOne` and `OwnsMany` make the owned type's table the owner's table by default.** If you later decide the owned type needs its own table (e.g. for performance), switching from `OwnsOne` to a regular `HasOne` relationship is a breaking migration — EF drops the embedded columns and creates a new table. Design ownership carefully upfront.
-- **Calling `modelBuilder.Entity<T>()` multiple times for the same type in `OnModelCreating` is fine — EF merges the configuration.** But having both a data annotation (e.g. `[MaxLength(100)]`) and a conflicting Fluent API call (`.HasMaxLength(200)`) for the same property is confusing and Fluent API silently wins. Pick one style per property and stick to it — mixing creates ambiguity during code reviews and migration audits.
+- **`OnDelete(DeleteBehavior.Cascade)` is EF Core's default for required relationships.** Always set `OnDelete` explicitly — the cascade default is dangerous and on SQL Server causes schema errors with multiple cascade paths to the same table.
+- **`HasDefaultValueSql()` requires `ValueGeneratedOnAdd()`.** Without it, EF sends the property's default C# value (null, 0) in the INSERT statement, overwriting the database default. The generated column value is never used.
+- **Fluent API configuration is only read once at startup.** If your `IEntityTypeConfiguration<T>` class is in a different assembly than the one you pass to `ApplyConfigurationsFromAssembly`, it's silently skipped. No error — just missing configuration and EF falls back to conventions.
+- **Value converters on composite primary keys break EF's key comparison.** EF compares keys in C# for the identity cache. If you apply a converter to a PK property, EF may fail to locate already-tracked entities. Stick to primitive PKs or test identity cache behaviour carefully with converted PKs.
+- **`ToJson()` requires the provider to support JSON columns.** SQL Server maps JSON owned types to `nvarchar(max)`. Older SQL Server (pre-2016) has limited JSON support. PostgreSQL maps to `jsonb`. Always test JSON column queries on the target provider — LINQ translation into JSON path expressions varies.
+- **Calling `modelBuilder.Entity<T>()` multiple times for the same type merges configuration.** Having both a data annotation and a conflicting Fluent API call for the same property is confusing — Fluent API silently wins. Pick one style per property.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you know when conventions and data annotations fall short, and whether you can configure non-trivial relationships and constraints correctly — particularly delete behaviour and decimal precision, which are the most common production schema mistakes.
+**What they're really testing:** Whether you know when conventions and data annotations fall short, and whether you can configure non-trivial relationships and constraints — particularly delete behaviour, decimal precision, value converters, and JSON columns.
 
-**Common question form:** *"What's the difference between data annotations and Fluent API in EF Core?"* or *"How do you configure a composite primary key or a many-to-many relationship?"*
+**Common question form:** *"What's the difference between data annotations and Fluent API?"* or *"How do you configure a many-to-many relationship in EF Core?"*
 
-**The depth signal:** A junior answer says Fluent API goes in `OnModelCreating` and can do everything data annotations can. A senior answer explains that composite keys and owned types are Fluent API-only (annotations can't express them), why `OnDelete` must be set explicitly because the cascade default is dangerous, why `decimal` column types must always be configured (convention-generated precision varies by provider), how `IEntityTypeConfiguration<T>` classes scale `OnModelCreating` in larger projects, and why `HasDefaultValueSql` requires `ValueGeneratedOnAdd` to prevent EF from overwriting the DB-generated value with null in the INSERT statement.
+**The depth signal:** A junior answer says Fluent API goes in `OnModelCreating` and can do everything annotations can. A senior answer explains that composite keys, owned types, value converters, and JSON columns are Fluent API–only; why `OnDelete` must always be set explicitly (cascade default is dangerous); why `decimal` column types must be configured (convention precision varies by provider); how `IEntityTypeConfiguration<T>` classes scale `OnModelCreating` in large projects; how `ConfigureConventions` sets project-wide defaults (string max length, DateTime UTC, decimal precision); how value converters enable storing enums as strings, encrypting columns, and mapping value objects without changing entity classes; and why `HasDefaultValueSql` requires `ValueGeneratedOnAdd`.
 
 ---
 
 ## Related Topics
 
-- [[dotnet/ef-dbcontext.md]] — Fluent API lives inside `DbContext.OnModelCreating`; the context is the entry point and the host for all configuration.
-- [[dotnet/ef-code-first.md]] — Fluent API configuration directly drives what Code First migrations generate; getting the configuration wrong produces the wrong schema.
-- [[dotnet/ef-migrations.md]] — Every Fluent API change that affects the schema must be captured in a migration; understanding migrations explains why configuration must be finalised before running `migrations add`.
-- [[dotnet/ef-querying.md]] — Relationship configuration (navigation properties, foreign keys, owned types) determines what EF Core can and can't include in queries; a misconfigured relationship produces wrong or missing JOIN clauses.
+- [[dotnet/ef/ef-dbcontext.md]] — Fluent API lives inside `DbContext.OnModelCreating`; the context is the host for all configuration.
+- [[dotnet/ef/ef-code-first.md]] — Fluent API configuration drives what Code First migrations generate.
+- [[dotnet/ef/ef-owned-types.md]] — `OwnsOne`/`OwnsMany` and `ToJson()` are the key owned type configuration APIs covered briefly here and in depth there.
+- [[dotnet/ef/ef-inheritance.md]] — TPH/TPT/TPC configuration introduced here is covered in depth (discriminator setup, migration implications, query performance) in the inheritance file.
 
 ---
 
@@ -183,4 +274,4 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 https://learn.microsoft.com/en-us/ef/core/modeling
 
 ---
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-08*
