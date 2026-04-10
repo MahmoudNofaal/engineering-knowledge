@@ -4,6 +4,19 @@
 
 ---
 
+## Quick Reference
+
+| | |
+|---|---|
+| **What it is** | Declarative and programmatic validation of request DTOs before action execution |
+| **Use when** | Every public endpoint that accepts input — always |
+| **Avoid when** | Never avoid — but prefer FluentValidation over data annotations for complex cross-field rules |
+| **Introduced** | ASP.NET Core 1.0; auto-400 via `[ApiController]` added ASP.NET Core 2.1 |
+| **Namespace** | `System.ComponentModel.DataAnnotations`, `Microsoft.AspNetCore.Mvc` |
+| **Key types** | `ValidationAttribute`, `IValidatableObject`, `ModelStateDictionary`, `ValidationProblemDetails` |
+
+---
+
 ## When To Use It
 
 Use it on every public API endpoint that accepts input. It's the first line of defence against malformed data reaching your business logic or database. Data annotations handle the common cases (required fields, string length, numeric ranges) with no code in the action. Reach for `IValidatableObject` or FluentValidation when rules depend on multiple fields together, or when validation logic is complex enough to need unit testing on its own. Don't validate inside the action method with manual `if` checks when data annotations or a validation library will do the job — that logic belongs in the model, not the controller.
@@ -16,9 +29,39 @@ After model binding populates your action parameters, the framework runs validat
 
 ---
 
+## Version History
+
+| .NET Version | What changed |
+|---|---|
+| ASP.NET Core 1.0 | `ModelState`, `[Required]`, `[Range]`, `[StringLength]` etc. available |
+| ASP.NET Core 2.1 | `[ApiController]` — automatic 400 `ValidationProblemDetails` on invalid model state |
+| ASP.NET Core 2.2 | `ApiBehaviorOptions.InvalidModelStateResponseFactory` — customise 400 shape |
+| .NET 5 | `ProblemDetails` factory and `IProblemDetailsFactory` introduced |
+| .NET 7 | `IProblemDetailsService` added; `ValidationProblemDetails` integrates with `AddProblemDetails()` |
+
+*Before `[ApiController]`, every action that accepted input had to check `ModelState.IsValid` explicitly and return `BadRequest(ModelState)`. `[ApiController]` automated this but also made it invisible — causing confusion when the action never runs for invalid input.*
+
+---
+
+## Performance
+
+| Operation | Cost | Notes |
+|---|---|---|
+| Data annotation validation | O(k) | k = number of attributes; attribute execution is lightweight |
+| `IValidatableObject.Validate` | O(1) to O(n) | Depends on implementation; runs only if attribute validation passes |
+| `ModelState` dictionary construction | O(k) | Built once per request; pooled in most .NET versions |
+| Custom `ValidationAttribute` | Varies | Async not supported; avoid I/O in validation attributes |
+
+**Allocation behaviour:** `ModelState` entries allocate only when errors are present (happy path is near-zero). `ValidationProblemDetails` serialisation allocates proportionally to the number of errors. For high-volume APIs, consider suppressing the automatic 400 and returning a leaner custom error structure.
+
+**Benchmark notes:** Validation overhead is negligible for typical DTOs (<20 properties). FluentValidation has similar performance to data annotations for simple rules but adds DI overhead per validation run. Both are dominated by JSON deserialization cost on any realistic payload.
+
+---
+
 ## The Code
+
+**Data annotations on a request DTO**
 ```csharp
-// --- Data annotations on a request DTO ---
 public record CreateUserRequest
 {
     [Required(ErrorMessage = "Email is required.")]
@@ -43,14 +86,14 @@ public class UsersController : ControllerBase
     [HttpPost]
     public IActionResult Create(CreateUserRequest req)
     {
-        // With [ApiController]: this line is only reached if ModelState.IsValid == true.
-        // Invalid input returns 400 automatically before we get here.
+        // With [ApiController]: only reached if ModelState.IsValid == true
         return CreatedAtAction(nameof(GetById), new { id = 1 }, req);
     }
 }
 ```
+
+**Cross-field validation with `IValidatableObject`**
 ```csharp
-// --- Cross-field validation with IValidatableObject ---
 public class DateRangeRequest : IValidatableObject
 {
     [Required] public DateTime From { get; set; }
@@ -61,7 +104,7 @@ public class DateRangeRequest : IValidatableObject
         if (To <= From)
             yield return new ValidationResult(
                 "To must be after From.",
-                new[] { nameof(To) });          // field name appears in the error response
+                new[] { nameof(To) });
 
         if ((To - From).TotalDays > 365)
             yield return new ValidationResult(
@@ -70,8 +113,9 @@ public class DateRangeRequest : IValidatableObject
     }
 }
 ```
+
+**Custom validation attribute**
 ```csharp
-// --- Custom validation attribute ---
 [AttributeUsage(AttributeTargets.Property)]
 public class FutureDateAttribute : ValidationAttribute
 {
@@ -79,12 +123,10 @@ public class FutureDateAttribute : ValidationAttribute
     {
         if (value is DateTime date && date <= DateTime.UtcNow)
             return new ValidationResult("Date must be in the future.", new[] { ctx.MemberName! });
-
         return ValidationResult.Success;
     }
 }
 
-// Usage:
 public class ScheduleRequest
 {
     [Required]
@@ -92,9 +134,9 @@ public class ScheduleRequest
     public DateTime ScheduledAt { get; set; }
 }
 ```
+
+**Customising the 400 response shape**
 ```csharp
-// --- Customising the 400 response shape ---
-// In Program.cs — runs after [ApiController]'s default filter but lets you reshape the body
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
     options.InvalidModelStateResponseFactory = context =>
@@ -113,28 +155,25 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 ```
+
+**Manual ModelState check (when auto-400 is disabled)**
 ```csharp
-// --- Manual ModelState check (when [ApiController] auto-behaviour is disabled) ---
 [HttpPost]
 public IActionResult Create([FromBody] CreateUserRequest req)
 {
     if (!ModelState.IsValid)
-        return ValidationProblem(ModelState);   // same ProblemDetails shape as auto-400
-
-    // business logic here
+        return ValidationProblem(ModelState);  // same ProblemDetails shape as auto-400
     return Ok();
 }
 ```
+
+**Validating nested objects and opting out**
 ```csharp
-// --- Validating nested objects: [ValidateNever] to skip a property ---
 public class OrderRequest
 {
     [Required] public string CustomerId { get; set; } = "";
-
-    public List<OrderLineRequest> Lines { get; set; } = new();  // nested — validated automatically
-
-    [ValidateNever]                              // explicitly opt this property out of validation
-    public string? InternalNote { get; set; }
+    public List<OrderLineRequest> Lines { get; set; } = new();  // validated recursively
+    [ValidateNever] public string? InternalNote { get; set; }   // excluded from validation
 }
 
 public class OrderLineRequest
@@ -146,13 +185,105 @@ public class OrderLineRequest
 
 ---
 
+## Real World Example
+
+A booking API has complex validation: a room reservation requires `CheckIn` before `CheckOut`, the stay cannot exceed 30 nights, and the requested room category must be one of the valid values. The date rules use `IValidatableObject`; the category uses a custom attribute that reads from a static lookup.
+
+```csharp
+public class AllowedValuesAttribute(params string[] allowed) : ValidationAttribute
+{
+    protected override ValidationResult? IsValid(object? value, ValidationContext ctx)
+    {
+        if (value is string s && !allowed.Contains(s, StringComparer.OrdinalIgnoreCase))
+            return new ValidationResult(
+                $"'{s}' is not a valid value. Allowed: {string.Join(", ", allowed)}",
+                new[] { ctx.MemberName! });
+        return ValidationResult.Success;
+    }
+}
+
+public class RoomReservationRequest : IValidatableObject
+{
+    [Required]
+    public DateOnly CheckIn { get; set; }
+
+    [Required]
+    public DateOnly CheckOut { get; set; }
+
+    [Required]
+    [AllowedValues("standard", "deluxe", "suite")]
+    public string RoomCategory { get; set; } = "";
+
+    [Range(1, 6)]
+    public int Guests { get; set; }
+
+    [StringLength(500)]
+    public string? SpecialRequests { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext context)
+    {
+        if (CheckOut <= CheckIn)
+            yield return new ValidationResult(
+                "Check-out must be after check-in.",
+                new[] { nameof(CheckOut) });
+
+        var nights = CheckOut.DayNumber - CheckIn.DayNumber;
+        if (nights > 30)
+            yield return new ValidationResult(
+                $"Maximum stay is 30 nights. Requested: {nights}.",
+                new[] { nameof(CheckIn), nameof(CheckOut) });
+
+        if (CheckIn < DateOnly.FromDateTime(DateTime.UtcNow))
+            yield return new ValidationResult(
+                "Check-in cannot be in the past.",
+                new[] { nameof(CheckIn) });
+    }
+}
+
+[ApiController]
+[Route("api/reservations")]
+public class ReservationsController : ControllerBase
+{
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] RoomReservationRequest req)
+    {
+        // Reaches here only if all annotations AND IValidatableObject.Validate passed
+        var reservation = await _reservations.CreateAsync(req);
+        return CreatedAtAction(nameof(GetById), new { id = reservation.Id }, reservation);
+    }
+}
+```
+
+*The key insight: attribute validation (`[AllowedValues]`, `[Range]`) runs first and guards individual fields. `IValidatableObject.Validate` runs only if all attributes pass — it can safely assume `CheckIn` and `CheckOut` are non-null and valid dates when it applies its cross-field logic. The action body is clean.*
+
+---
+
+## Common Misconceptions
+
+**"FluentValidation replaces data annotations entirely."**
+FluentValidation handles API input validation — it replaces `[Required]`, `[Range]`, `IValidatableObject`. But data annotations on your EF Core entities serve a different purpose: they inform the database schema (`[MaxLength]` sets column size). You often need both — FluentValidation on your DTOs for API validation, and data annotations on your entities for database constraints. They serve different layers.
+
+**"`IValidatableObject.Validate` always runs."**
+It only runs if all data annotation checks pass first. If `[Required]` fails on a property, `Validate` is never called. This means cross-field rules in `Validate` that assume properties are non-null can't rely on that assumption — you must null-check inside `Validate` defensively, or restructure so the attribute validation guarantees the precondition.
+
+**"`[StringLength]` and `[MaxLength]` do the same thing."**
+`[StringLength(100)]` is a validation attribute — it checks at request time and returns 400 if violated. `[MaxLength(100)]` is an EF Core mapping hint — it sets the column size in the database schema. Using `[MaxLength]` alone won't validate incoming API requests. Always use `[StringLength]` (or FluentValidation) for API input, and optionally `[MaxLength]` on the same property for the DB constraint.
+
+---
+
 ## Gotchas
 
-- **`IValidatableObject.Validate` only runs if all data annotation checks pass first.** The framework runs attribute-based validation before calling `Validate`. If `[Required]` fails on a property, `Validate` is never called. This means cross-field rules that assume properties are non-null can't rely on `Validate` to guard them — you must null-check inside `Validate` defensively.
-- **Nested object properties are validated recursively, but only one level deep by default with collections.** A `List<OrderLineRequest>` on a parent DTO will have each element's annotations validated. However, if you have a collection inside a collection, validation may not recurse into the inner level. Test nested validation explicitly rather than assuming it works at arbitrary depth.
-- **`[Required]` on a non-nullable value type is redundant but not harmful.** `[Required] public int Quantity` — `int` can never be null, so the required check always passes. The real purpose of `[Required]` is for `string?` and nullable types. Putting it on `int` doesn't hurt, but it misleads readers into thinking it's doing something. Use `[Range(1, int.MaxValue)]` if you want to reject zero.
-- **The automatic 400 fires before `OnActionExecuting` filters but after `IResourceFilter`.** If you have an `IActionFilter` that expects to log or intercept invalid requests, it won't see them — `ModelStateInvalidFilter` runs first and the pipeline short-circuits. To intercept these, use `IAlwaysRunResultFilter` or customise `InvalidModelStateResponseFactory` instead.
-- **`[StringLength]` and `[MaxLength]` look similar but serve different purposes.** `[StringLength(100)]` is a validation attribute — it checks at request time and returns a 400 if violated. `[MaxLength(100)]` is an EF Core mapping hint — it sets the column size in the database schema. Using `[MaxLength]` alone won't validate incoming API requests. Always use `[StringLength]` (or FluentValidation) for API input, and optionally `[MaxLength]` on the same property for the DB constraint.
+- **`IValidatableObject.Validate` only runs if all data annotation checks pass first.** The framework runs attribute-based validation before calling `Validate`. If `[Required]` fails on a property, `Validate` is never called. Cross-field rules that assume properties are non-null must null-check inside `Validate` defensively.
+
+- **Nested object properties are validated recursively, but only one level deep by default with collections.** A `List<OrderLineRequest>` will have each element's annotations validated. However, collections nested inside collections may not recurse into the inner level. Test nested validation explicitly.
+
+- **`[Required]` on a non-nullable value type is redundant.** `[Required] public int Quantity` — `int` can never be null, so the required check always passes. The real purpose of `[Required]` is for `string?` and nullable types. Use `[Range(1, int.MaxValue)]` if you want to reject zero.
+
+- **The automatic 400 fires before `OnActionExecuting` action filters.** `ModelStateInvalidFilter` runs before user-defined action filters. If you have a filter that expects to log or intercept invalid requests, it won't see them — `ModelStateInvalidFilter` short-circuits first. Use `IAlwaysRunResultFilter` or customise `InvalidModelStateResponseFactory` instead.
+
+- **Custom `ValidationAttribute` cannot be `async`.** `IsValid` is synchronous. If your validation needs a database check (e.g., "does this username already exist?"), you cannot do it inside a `ValidationAttribute`. Use FluentValidation with `MustAsync` instead, or move the check into the action body after other validation passes.
+
+- **`[ApiController]` automatic 400 only triggers for `ModelState` errors, not for exceptions.** If your DTO constructor throws, or a type converter throws, you get an unhandled exception, not a clean 400. Validation attributes report errors via `ModelState`; they don't throw.
 
 ---
 
@@ -160,24 +291,33 @@ public class OrderLineRequest
 
 **What they're really testing:** Whether you know the validation pipeline well enough to reason about where errors are caught, what the response shape looks like, and how to extend it for real business rules.
 
-**Common question form:** "How do you validate request data in ASP.NET Core?" or "How would you enforce a rule that depends on two fields at once?" or "How do you change the shape of the 400 validation error response?"
+**Common question forms:**
+- "How do you validate request data in ASP.NET Core?"
+- "How would you enforce a rule that depends on two fields at once?"
+- "How do you change the shape of the 400 validation error response?"
+- "When would you use FluentValidation instead of data annotations?"
 
-**The depth signal:** A junior knows data annotations and `ModelState.IsValid`. A senior knows that `[ApiController]` wires in `ModelStateInvalidFilter` as an action filter with order `-2000` (runs before all user-defined filters), that `IValidatableObject` only runs after all attribute checks pass (so it can't rescue a null `[Required]` field), and can articulate the trade-off between data annotations (fast, declarative, but hard to unit test) and FluentValidation (testable validators, fluent syntax, registered via `AddFluentValidation()` as `IValidator<T>` in DI, runs as a custom action filter). They also know how to reshape the error response via `InvalidModelStateResponseFactory` without breaking the standard `ProblemDetails` contract that clients expect.
+**The depth signal:** A junior knows data annotations and `ModelState.IsValid`. A senior knows that `[ApiController]` wires in `ModelStateInvalidFilter` as an action filter with order `-2000` (runs before all user-defined filters), that `IValidatableObject` only runs after all attribute checks pass (so it can't rescue a null `[Required]` field), and can articulate the trade-off between data annotations (fast, declarative, but hard to unit test in isolation) and FluentValidation (testable validators, fluent syntax, registered via `AddFluentValidation()` as `IValidator<T>` in DI, runs as a custom action filter). They also know how to reshape the error response via `InvalidModelStateResponseFactory` without breaking the standard `ProblemDetails` contract.
+
+**Follow-up questions to expect:**
+- "How does FluentValidation integrate with ASP.NET Core's validation pipeline?"
+- "What's the execution order of attribute validation vs `IValidatableObject`?"
+- "Can validation attributes be async? What are the alternatives?"
 
 ---
 
 ## Related Topics
 
-- [[dotnet/webapi-model-binding.md]] — binding runs before validation; `ModelState` is populated during binding and then checked during validation — they're two steps in the same pipeline
-- [[dotnet/webapi-controllers.md]] — `[ApiController]` on the controller is what activates automatic 400 responses; without it, validation errors are silent unless you check `ModelState` manually
-- [[dotnet/webapi-filters.md]] — `ModelStateInvalidFilter` is an action filter; understanding filter order explains why your `OnActionExecuting` doesn't see invalid requests
-- [[dotnet/webapi-problem-details.md]] — the 400 response body is a `ValidationProblemDetails` object, which is an extension of the RFC 7807 `ProblemDetails` format; knowing the shape helps you design consistent error contracts
+- [[dotnet/webapi/webapi-model-binding.md]] — binding runs before validation; `ModelState` is populated during binding and then checked during validation — two steps in the same pipeline
+- [[dotnet/webapi/webapi-controllers.md]] — `[ApiController]` on the controller activates automatic 400 responses; without it, validation errors are silent
+- [[dotnet/webapi/webapi-filters.md]] — `ModelStateInvalidFilter` is an action filter; understanding filter order explains why your `OnActionExecuting` doesn't see invalid requests
+- [[dotnet/webapi/webapi-exception-handling.md]] — validation failures produce 400 responses through the filter pipeline, not through exception handling; the two mechanisms are separate
 
 ---
 
 ## Source
 
-[https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation](https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation)
+https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation
 
 ---
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-10*
