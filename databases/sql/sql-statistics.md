@@ -4,157 +4,107 @@
 
 ---
 
+## Quick Reference
+
+| | |
+|---|---|
+| **What it is** | Per-column metadata the planner uses for row count estimation |
+| **Use when** | Diagnosing plan regressions; after bulk loads; on high-cardinality or skewed columns |
+| **Avoid when** | Ignoring — stale statistics silently cause bad plans |
+| **Standard** | Implementation-defined; PostgreSQL: `pg_stats`, `pg_statistic`, extended statistics |
+| **Key commands** | `ANALYZE`, `VACUUM ANALYZE`, `CREATE STATISTICS` |
+| **Symptom of stale stats** | Large gap between `rows=N` (estimate) and `actual rows=M` in EXPLAIN ANALYZE |
+
+---
+
 ## When To Use It
-Statistics matter any time the planner chooses a bad execution plan — wrong join order, skipping an index it should use, or choosing a sequential scan on a large table. The symptom is always the same: a large gap between estimated rows and actual rows in EXPLAIN ANALYZE. Statistics also degrade after bulk loads, large deletes, or any operation that changes the data distribution significantly. Understanding statistics is the prerequisite for diagnosing plan regressions — queries that were fast and then suddenly aren't, with no query or schema change.
+
+Statistics matter any time the planner chooses a bad execution plan — wrong join order, skipping an index it should use, or choosing a sequential scan on a large table. The symptom is always the same: a large gap between estimated rows and actual rows in EXPLAIN ANALYZE. Statistics also degrade after bulk loads, large deletes, or any operation that significantly changes data distribution. Understanding statistics is the prerequisite for diagnosing plan regressions — queries that were fast and then suddenly aren't, with no query or schema change.
 
 ---
 
 ## Core Concept
-The planner never looks at raw table data when choosing a plan — it looks at statistics. PostgreSQL collects statistics per column: the number of distinct values, the most common values and their frequencies, a histogram of value distribution, and correlation between physical row order and column value order. These are stored in `pg_statistic` (raw) and `pg_stats` (human-readable). The autovacuum process refreshes statistics automatically when roughly 20% of a table's rows change. When statistics are stale or the data has an unusual distribution, the planner's row estimates go wrong — and a wrong estimate cascades into a wrong plan.
+
+The planner never looks at raw table data when choosing a plan — it looks at statistics. PostgreSQL collects per-column statistics: the number of distinct values, the most common values and their frequencies, a histogram of value distribution, and correlation between physical row order and column value. These live in `pg_statistic` (raw) and `pg_stats` (human-readable view). The autovacuum process refreshes statistics automatically when roughly 20% of a table's rows change. When statistics are stale or data has an unusual distribution, the planner's estimates go wrong — and a wrong estimate cascades into a wrong plan.
+
+---
+
+## Version History
+
+| PostgreSQL Version | What changed |
+|---|---|
+| Pre-8.0 | Per-column statistics; configurable via default_statistics_target |
+| 9.0 | Per-column statistics targets overrideable per column |
+| 10 | Extended statistics (`CREATE STATISTICS`) — cross-column dependencies |
+| 12 | Most common value (MCV) lists in extended statistics |
+| 14 | Extended statistics for expressions |
+| 15 | Better statistics for range types and partitioned tables |
+
+---
+
+## Performance
+
+| Statistics operation | Cost | Notes |
+|---|---|---|
+| `ANALYZE table` | Fast — random sample | Does NOT read the full table; samples ~30,000 rows by default |
+| `VACUUM ANALYZE` | Moderate — seq scan + sample | Reclaims dead rows AND refreshes statistics |
+| `CREATE STATISTICS` | One-time cost | Collects extended stats; refreshed by subsequent ANALYZE |
+| Autovacuum analyze | Background, low priority | May lag after bulk operations — run manually if needed |
+
+**Autovacuum threshold:** By default, autovacuum triggers ANALYZE after 20% of rows change (`autovacuum_analyze_scale_factor = 0.2`). On a 100M-row table, that's 20M changes before statistics refresh. Plans can degrade badly long before autovacuum kicks in. Lower the scale factor for large, frequently-updated tables.
 
 ---
 
 ## The Code
 
-**Read current statistics for a table's columns**
+**Read current statistics for a column**
 ```sql
 SELECT
-    attname          AS column_name,
-    n_distinct,      -- negative means fraction of total rows (e.g. -1 = all unique)
+    attname              AS column_name,
+    n_distinct,          -- negative = fraction of total rows (e.g. -1 = all unique)
     most_common_vals,
     most_common_freqs,
     histogram_bounds,
-    correlation      -- 1.0 = perfectly ordered, -1.0 = reverse, 0 = random
+    correlation          -- 1.0 = perfectly correlated with physical order; 0 = random
 FROM pg_stats
 WHERE tablename = 'orders'
+  AND attname   = 'status'
 ORDER BY attname;
 ```
 
 **Check when a table was last analyzed**
 ```sql
 SELECT
-    relname                 AS table_name,
+    relname                  AS table_name,
     last_analyze,
     last_autoanalyze,
-    n_live_tup,             -- estimated live rows
-    n_dead_tup,             -- dead rows waiting for vacuum
-    n_mod_since_analyze     -- rows modified since last analyze
+    n_live_tup,
+    n_dead_tup,
+    n_mod_since_analyze      -- rows modified since last analyze
 FROM pg_stat_user_tables
 WHERE relname = 'orders';
 ```
 
 **Manually refresh statistics**
 ```sql
--- Update statistics for one table (fast)
-ANALYZE orders;
-
--- Update statistics for specific columns only
-ANALYZE orders (user_id, status, created_at);
-
--- Update statistics for the entire database
-ANALYZE;
-
--- Reclaim dead rows and update statistics together
-VACUUM ANALYZE orders;
+ANALYZE orders;                          -- one table, all columns
+ANALYZE orders (user_id, status, created_at); -- specific columns only
+ANALYZE;                                 -- entire database (slow — use carefully)
+VACUUM ANALYZE orders;                   -- dead rows + statistics together
 ```
 
-**Increase statistics target for a skewed column**
+**Increase statistics target for a skewed or high-cardinality column**
 ```sql
--- Default statistics target is 100 (samples ~300 most common values)
--- For high-cardinality or skewed columns, increase it
+-- Default target is 100 — samples up to 300 most common values
+-- For high-cardinality or heavily skewed columns, increase it
 
 ALTER TABLE orders
 ALTER COLUMN status SET STATISTICS 500;
 
--- Then re-analyze to collect at the new target
-ANALYZE orders;
+ANALYZE orders;  -- collect at the new target
 
--- Verify the new target is reflected
+-- Check the per-column target
 SELECT attname, attstattarget
-FROM pg_attribute
-JOIN pg_class ON pg_class.oid = pg_attribute.attrelid
-WHERE relname = 'orders' AND attname = 'status';
-```
-
-**Spot a stale statistics problem in EXPLAIN ANALYZE**
-```sql
-EXPLAIN ANALYZE
-SELECT * FROM orders WHERE user_id = 42 AND status = 'completed';
-
--- Bad output (stale statistics):
--- Index Scan ... (cost=0.43..8.50 rows=3 width=64)
---               actual rows=48291 loops=1
--- Estimated 3 rows, got 48291 — planner had no idea
-
--- Fix:
-ANALYZE orders;
-
--- Re-run plan — estimates should now be close to actuals
-EXPLAIN ANALYZE
-SELECT * FROM orders WHERE user_id = 42 AND status = 'completed';
-```
-
-**Extended statistics — multi-column correlations**
-```sql
--- PostgreSQL estimates multi-column conditions independently by default
--- This underestimates rows when columns are correlated
-
--- Example: country and city are correlated — most cities belong to one country
--- Without extended stats, planner multiplies their selectivities independently
--- and severely underestimates the result
-
-CREATE STATISTICS orders_user_status_stats (dependencies)
-ON user_id, status
-FROM orders;
-
--- Collect the extended statistics
-ANALYZE orders;
-
--- Now the planner accounts for correlation between user_id and status
--- Check what was collected:
-SELECT * FROM pg_stats_ext WHERE statistics_name = 'orders_user_status_stats';
-```
-
-**Extended statistics types**
-```sql
--- dependencies: detects functional dependency between columns
---   (e.g. zip code determines city)
-CREATE STATISTICS zip_city_stats (dependencies) ON zip_code, city FROM addresses;
-
--- ndistinct: corrects distinct value estimates for column combinations
---   (e.g. (country, city) has fewer combinations than country * city)
-CREATE STATISTICS country_city_stats (ndistinct) ON country, city FROM addresses;
-
--- mcv: most common value combinations across multiple columns
-CREATE STATISTICS user_status_mcv (mcv) ON user_id, status FROM orders;
-
--- All three types at once:
-CREATE STATISTICS full_stats (dependencies, ndistinct, mcv)
-ON country, city, zip_code FROM addresses;
-```
-
-**Autovacuum statistics settings**
-```sql
--- View current autovacuum thresholds for a table
-SELECT
-    relname,
-    reloptions   -- per-table storage options including autovacuum settings
-FROM pg_class
-WHERE relname = 'orders';
-
--- Override autovacuum analyze threshold for a high-write table
--- Default: analyze after 20% of rows change (too infrequent for large tables)
-ALTER TABLE orders SET (
-    autovacuum_analyze_scale_factor = 0.01,  -- analyze after 1% change
-    autovacuum_analyze_threshold = 1000       -- minimum 1000 rows changed
-);
-```
-
-**Check statistics target per column**
-```sql
-SELECT
-    attname,
-    attstattarget   -- -1 means use default (100); 0 means disabled
 FROM pg_attribute
 JOIN pg_class ON pg_class.oid = pg_attribute.attrelid
 WHERE relname = 'orders'
@@ -163,37 +113,180 @@ WHERE relname = 'orders'
 ORDER BY attname;
 ```
 
+**Spot stale statistics in EXPLAIN ANALYZE**
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM orders WHERE user_id = 42 AND status = 'completed';
+
+-- BAD output (stale):
+-- Index Scan (cost=0.43..8.50 rows=3 width=64)
+--             actual rows=48291                ← estimated 3, got 48,291
+
+-- Fix:
+ANALYZE orders;
+
+-- Re-run — estimates should now be close to actuals:
+-- Index Scan (cost=0.43..250.00 rows=48000 width=64)
+--             actual rows=48291                ← much closer
+```
+
+**Extended statistics — multi-column correlations**
+```sql
+-- By default, the planner estimates multi-column WHERE conditions independently
+-- by multiplying individual selectivities — assuming columns are independent.
+-- If columns are correlated (e.g. status and country), this underestimates rows.
+
+-- Create extended statistics to let the planner account for correlation
+CREATE STATISTICS orders_user_status_stats (dependencies)
+ON user_id, status
+FROM orders;
+
+ANALYZE orders;   -- collect the extended statistics
+
+-- Verify what was collected
+SELECT * FROM pg_stats_ext
+WHERE statistics_name = 'orders_user_status_stats';
+
+-- Also available: ndistinct (corrects cardinality estimates for combinations)
+CREATE STATISTICS country_city_stats (ndistinct) ON country, city FROM addresses;
+
+-- MCV (most common value combinations) for column pairs
+CREATE STATISTICS user_status_mcv (mcv) ON user_id, status FROM orders;
+
+-- Collect all three types at once
+CREATE STATISTICS full_ext_stats (dependencies, ndistinct, mcv)
+ON country, city, zip_code FROM addresses;
+```
+
+**Expression statistics (PostgreSQL 14+)**
+```sql
+-- If a query frequently filters on an expression, stats can be collected on it
+CREATE STATISTICS expr_stats ON (lower(email)) FROM users;
+ANALYZE users;
+-- Now the planner has statistics for lower(email) just like a regular column
+```
+
+**Tune autovacuum for large high-write tables**
+```sql
+-- Default: analyze after 20% of rows change — too infrequent for large tables
+-- Override per-table:
+ALTER TABLE orders SET (
+    autovacuum_analyze_scale_factor = 0.01,  -- analyze after 1% change (not 20%)
+    autovacuum_analyze_threshold    = 1000    -- minimum 1000 rows changed
+);
+
+-- Check current settings
+SELECT relname, reloptions
+FROM pg_class
+WHERE relname = 'orders';
+```
+
+---
+
+## Real World Example
+
+A reporting query that grouped orders by `(user_id, status)` was using a full sequential scan despite indexes on both columns. EXPLAIN ANALYZE showed the planner estimated 12 rows but the query returned 95,000. The root cause: `user_id` and `status` are correlated — most users have only one or two statuses — but the planner assumed they were independent and multiplied their individual selectivities, producing a badly wrong row estimate that caused it to choose a seq scan over the index.
+
+```sql
+-- Step 1: observe the bad plan
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT user_id, status, COUNT(*), SUM(total_amount)
+FROM orders
+WHERE user_id BETWEEN 1000 AND 1100
+  AND status IN ('completed', 'refunded')
+GROUP BY user_id, status;
+
+-- Seq Scan on orders  (cost=0.00..45000 rows=12 width=32)
+--   actual rows=95000  ← planners assumed independence, badly wrong
+
+-- Step 2: look at per-column statistics
+SELECT attname, n_distinct, most_common_vals, most_common_freqs
+FROM pg_stats WHERE tablename = 'orders' AND attname IN ('user_id', 'status');
+-- user_id: n_distinct=-0.02  (2% of rows have unique user IDs)
+-- status:  most_common = ['completed':0.85, 'refunded':0.05, 'pending':0.10]
+
+-- Step 3: the planner estimated selectivity as:
+-- P(user_id in range) * P(status in list) = 0.02 * 0.90 = 0.018 → 12 rows
+-- Reality: nearly all users in that range have completed/refunded orders
+
+-- Step 4: create extended statistics to model the dependency
+CREATE STATISTICS orders_user_status (dependencies, mcv)
+ON user_id, status
+FROM orders;
+
+ANALYZE orders;
+
+-- Step 5: re-run plan
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT user_id, status, COUNT(*), SUM(total_amount)
+FROM orders WHERE user_id BETWEEN 1000 AND 1100 AND status IN ('completed', 'refunded')
+GROUP BY user_id, status;
+
+-- Index Scan using idx_orders_user_status  ← planner now chooses the index
+--   actual rows=95000, estimated rows=94000  ← much closer
+-- Execution time: 420ms → 18ms
+```
+
+*The key insight: the problem wasn't a missing index or stale single-column statistics — it was missing cross-column statistics. The planner's independence assumption was wrong for these two correlated columns. Extended statistics taught the planner about the real joint distribution, fixing the estimate and the plan choice.*
+
+---
+
+## Common Misconceptions
+
+**"ANALYZE reads the full table — it's expensive"**
+ANALYZE takes a random sample of ~30,000 rows (controlled by `default_statistics_target`), not a full table scan. It's fast even on large tables. The 30-second query slowdown caused by stale statistics is almost always more expensive than the 2-second ANALYZE that would have prevented it. Don't avoid ANALYZE because the table is large.
+
+**"Autovacuum keeps statistics up to date"**
+Autovacuum's analyze trigger fires after 20% of rows change — which is 20 million rows on a 100M-row table. After a bulk load, large delete, or data backfill, statistics are immediately stale until autovacuum catches up. After any significant bulk data change, run `ANALYZE` manually. Don't wait for autovacuum.
+
+**"Statistics are per-table"**
+Statistics in PostgreSQL are per-column within a table. The planner has independent statistics for `user_id` and for `status`, but doesn't know about their joint distribution unless you create extended statistics. Multi-column queries can be estimated incorrectly even when single-column statistics are fresh and accurate.
+
 ---
 
 ## Gotchas
 
-- **Autovacuum uses a percentage threshold — it's too slow for large tables** — the default `autovacuum_analyze_scale_factor` is 0.2, meaning analyze runs after 20% of rows change. On a table with 100 million rows, that's 20 million changes before statistics refresh. Plans can degrade badly long before autovacuum kicks in. Lower the scale factor for large, frequently updated tables.
-- **Statistics are per-column, not per-combination by default** — the planner estimates multi-column WHERE clauses by multiplying individual column selectivities, assuming independence. If columns are correlated (status and country, user_id and plan_type), estimates are wildly off. Extended statistics (`CREATE STATISTICS`) fix this but must be created explicitly — they don't exist by default.
-- **High-cardinality columns with skewed distribution need a higher statistics target** — the default target of 100 collects at most ~300 most common values. For a column like `user_id` with millions of distinct values skewed toward a few heavy users, the planner's histogram is too coarse. Increase the target with `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS 500` and re-analyze.
-- **ANALYZE on a large table can be slow — but not as slow as a bad plan** — ANALYZE does a random sample of the table, not a full scan, so it's usually fast even on large tables. Don't avoid it because the table is big. The cost of a bad plan from stale statistics is almost always worse.
-- **Statistics don't survive a table rebuild** — operations like `VACUUM FULL`, `CLUSTER`, or `ALTER TABLE` that rewrite the table reset statistics. Always run `ANALYZE` immediately after any table-rewriting operation, or the planner starts with no data about the new layout.
+- **Autovacuum uses a percentage threshold — too slow for large tables** — the default `autovacuum_analyze_scale_factor` is 0.2 (20%). On a 100M-row table, that's 20M row changes before analyze runs. Lower the per-table threshold for large, frequently-modified tables.
+
+- **Statistics are per-column by default — multi-column conditions need extended statistics** — the planner estimates `WHERE a = x AND b = y` by multiplying P(a=x) × P(b=y), assuming independence. If a and b are correlated, this is wrong. Create `CREATE STATISTICS` to fix multi-column estimates.
+
+- **High-cardinality columns with skewed distribution need higher statistics targets** — the default target of 100 collects at most ~300 most common values. For a `user_id` column with millions of distinct values skewed toward a few heavy users, the histogram is too coarse. Increase per column with `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS 500`.
+
+- **Statistics don't survive a table rebuild** — `VACUUM FULL`, `CLUSTER`, or `ALTER TABLE` that rewrites the table resets statistics. Always run `ANALYZE` immediately after any table-rewriting operation.
+
+- **Extended statistics must be explicitly created — they don't exist by default** — even if `user_id` and `status` are the two most commonly co-filtered columns in your application, PostgreSQL won't collect joint statistics unless you run `CREATE STATISTICS`. This is a manual, deliberate step.
 
 ---
 
 ## Interview Angle
+
 **What they're really testing:** Whether you understand that the query planner is a cost-based optimizer that depends on statistics — and whether you can trace a bad plan back to its statistical root cause.
 
-**Common question form:** "A query that was fast last week is now slow and nothing changed in the code — how do you investigate?" or "The planner keeps choosing a sequential scan even though there's an index on that column — why?"
+**Common question forms:**
+- "A query that was fast last week is now slow and nothing changed in the code — how do you investigate?"
+- "The planner keeps choosing a sequential scan even though there's an index — why?"
+- "What are extended statistics and when would you use them?"
 
-**The depth signal:** A junior knows ANALYZE exists and runs it when things are slow. A senior reads `pg_stats` to check actual column statistics, identifies the mismatch between estimated and actual rows in EXPLAIN ANALYZE as a statistics problem rather than an index problem, knows that multi-column correlations require extended statistics, lowers the autovacuum scale factor for large high-write tables rather than running ANALYZE manually on a cron, and understands that increasing the statistics target for a skewed column gives the planner a more accurate histogram. Knowing that statistics don't survive table rebuilds and that extended statistics must be explicitly created is a strong senior signal.
+**The depth signal:** A junior knows ANALYZE exists and runs it when things are slow. A senior reads `pg_stats` to check actual column statistics, identifies the estimate vs actual row gap in EXPLAIN ANALYZE as a statistics problem (not necessarily an index problem), knows that multi-column correlations require extended statistics, lowers autovacuum scale factors for large high-write tables, and understands that increasing the statistics target for a skewed column gives the planner a more accurate histogram. Knowing that statistics don't survive table rebuilds and that extended statistics must be explicitly created is a strong senior signal.
+
+**Follow-up questions to expect:**
+- "What does `n_distinct = -0.5` mean in pg_stats?"
+- "How does the planner estimate the selectivity of `WHERE status = 'active'`?"
 
 ---
 
 ## Related Topics
-- [[databases/sql-execution-plans.md]] — the estimated vs actual row count gap in EXPLAIN ANALYZE is the primary signal that statistics are stale
-- [[databases/sql-indexing.md]] — the planner uses statistics to decide whether an index scan or seq scan is cheaper
-- [[databases/sql-query-optimization.md]] — stale statistics are one of the four root causes of slow queries; ANALYZE is the first fix to try
-- [[databases/sql-locking-blocking.md]] — VACUUM ANALYZE reclaims dead rows and refreshes statistics together; understanding bloat connects both topics
+
+- [[databases/sql/sql-execution-plans.md]] — the estimated vs actual row count gap in EXPLAIN ANALYZE is the primary signal that statistics are stale
+- [[databases/sql/sql-indexing.md]] — the planner uses statistics to decide whether an index scan or seq scan is cheaper
+- [[databases/sql/sql-query-optimization.md]] — stale statistics are one of the four root causes of slow queries
+- [[databases/sql/sql-locking-blocking.md]] — VACUUM ANALYZE reclaims dead rows and refreshes statistics; both topics connect here
 
 ---
 
 ## Source
+
 https://www.postgresql.org/docs/current/planner-stats.html
 
 ---
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-13*
