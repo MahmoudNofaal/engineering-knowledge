@@ -1,74 +1,101 @@
 # Breadth-First Search
-> A graph traversal that explores all neighbors at the current depth before moving to the next level — guarantees shortest path on unweighted graphs.
+
+> A graph traversal that explores all neighbours at the current depth before moving to the next level — guarantees shortest path on unweighted graphs.
+
+---
+
+## Quick Reference
+
+| | |
+|---|---|
+| **What it is** | Level-by-level graph traversal using a queue |
+| **Use when** | Shortest path (unweighted), level-order traversal, nearest X |
+| **Avoid when** | Weighted edges (use Dijkstra); exploring all paths (use DFS) |
+| **C# version** | C# 1.0+ (uses `Queue<T>`) |
+| **Namespace** | `System.Collections.Generic` |
+| **Key types** | `Queue<T>`, `HashSet<T>` for visited |
 
 ---
 
 ## When To Use It
-Use BFS when you need the shortest path on an unweighted graph, when you need to process nodes level by level, or when the answer is likely close to the start (DFS might waste time going deep before finding it). Don't use BFS when you need to explore all paths or detect cycles in directed graphs — DFS handles those better. For weighted graphs, use Dijkstra's algorithm instead.
+
+Use BFS when you need the shortest path on an unweighted graph, level-by-level processing, or finding the nearest occurrence of a condition. The signal is "minimum steps," "shortest path," or "nearest X." For weighted graphs, use Dijkstra. For exploring all paths or detecting cycles in directed graphs, use DFS.
 
 ---
 
 ## Core Concept
-BFS processes nodes in order of their distance from the source. It uses a queue: start by enqueuing the source, then repeatedly dequeue a node, enqueue its unvisited neighbors, and record their distance as current + 1. Because a node is first reached via the fewest hops possible, the first time BFS reaches the destination is guaranteed to be via the shortest route.
 
-The key implementation detail that trips people up: mark nodes visited when you enqueue them, not when you dequeue them. If you mark on dequeue, the same node can be enqueued multiple times before being processed, causing duplicate work or, in the worst case, infinite loops.
+BFS processes nodes in non-decreasing order of distance from the source. It uses a queue: enqueue the source, then repeatedly dequeue a node, enqueue its unvisited neighbours, and record their distance as current + 1. The first time BFS reaches the destination is via the shortest route — guaranteed because all edges have equal cost (1).
+
+Critical implementation detail: mark nodes visited when you **enqueue** them, not when you dequeue them. Marking on dequeue allows the same node to be enqueued multiple times before being processed — causing duplicate work or infinite loops.
+
+---
+
+## Algorithm History
+
+| Year | Development |
+|---|---|
+| 1945 | Konrad Zuse describes a similar traversal in his Plankalkül language notes |
+| 1959 | Edward Moore publishes BFS for finding shortest paths in mazes |
+| 1961 | C.Y. Lee independently develops BFS for circuit routing |
+| 1970s | Formalized in graph algorithm textbooks |
+
+---
+
+## Performance
+
+| Operation | Time | Space | Notes |
+|---|---|---|---|
+| BFS traversal | O(V + E) | O(V) | V vertices, E edges |
+| Shortest path (unweighted) | O(V + E) | O(V) | First reach = shortest |
+| Level-order traversal | O(V + E) | O(V) | Snapshot level size each level |
+| Multi-source BFS | O(V + E) | O(V) | Seed all sources at distance 0 |
+
+**Allocation behaviour:** One `Queue<T>` (up to O(V) entries at peak), one `HashSet<T>` for visited (O(V)). No per-step allocation in the inner loop.
 
 ---
 
 ## The Code
 
-**BFS — shortest path on unweighted graph**
+**Scenario 1 — shortest path on unweighted graph**
 ```csharp
-using System;
-using System.Collections.Generic;
-
 public int BFS(Dictionary<int, List<int>> graph, int start, int end)
 {
     var visited = new HashSet<int> { start };
-    var queue = new Queue<(int node, int dist)>();
+    var queue   = new Queue<(int Node, int Dist)>();
     queue.Enqueue((start, 0));
+
     while (queue.Count > 0)
     {
         var (node, dist) = queue.Dequeue();
-        if (node == end)
-            return dist;
-        foreach (int neighbor in graph[node])
-        {
-            if (!visited.Contains(neighbor))
-            {
-                visited.Add(neighbor);  // mark on enqueue, not dequeue
-                queue.Enqueue((neighbor, dist + 1));
-            }
-        }
+        if (node == end) return dist;
+        foreach (int neighbour in graph[node])
+            if (visited.Add(neighbour))          // Add returns false if already present
+                queue.Enqueue((neighbour, dist + 1));
     }
-    return -1;  // unreachable
+    return -1;
 }
 ```
 
-**BFS level order — process nodes layer by layer**
+**Scenario 2 — level-order traversal**
 ```csharp
 public List<List<int>> LevelOrder(Dictionary<int, List<int>> graph, int start)
 {
     var visited = new HashSet<int> { start };
-    var queue = new Queue<int>();
+    var queue   = new Queue<int>();
     queue.Enqueue(start);
     var levels = new List<List<int>>();
+
     while (queue.Count > 0)
     {
-        int levelSize = queue.Count;  // snapshot: how many nodes are in this level
-        var level = new List<int>();
+        int levelSize = queue.Count; // snapshot: how many nodes in this level
+        var level = new List<int>(levelSize);
         for (int i = 0; i < levelSize; i++)
         {
             int node = queue.Dequeue();
             level.Add(node);
-            foreach (int neighbor in graph[node])
-            {
-                if (!visited.Contains(neighbor))
-                {
-                    visited.Add(neighbor);
-                    queue.Enqueue(neighbor);
-                }
-            }
+            foreach (int nb in graph[node])
+                if (visited.Add(nb)) queue.Enqueue(nb);
         }
         levels.Add(level);
     }
@@ -76,60 +103,25 @@ public List<List<int>> LevelOrder(Dictionary<int, List<int>> graph, int start)
 }
 ```
 
-**BFS on a 2D grid — shortest path**
-```csharp
-public int ShortestPathGrid(char[][] grid, (int, int) start, (int, int) end)
-{
-    int rows = grid.Length, cols = grid[0].Length;
-    var visited = new HashSet<(int, int)> { start };
-    var queue = new Queue<(int r, int c, int dist)>();
-    queue.Enqueue((start.Item1, start.Item2, 0));
-    int[][] directions = new int[][] { new[] { -1, 0 }, new[] { 1, 0 }, new[] { 0, -1 }, new[] { 0, 1 } };
-    while (queue.Count > 0)
-    {
-        var (r, c, dist) = queue.Dequeue();
-        if ((r, c) == end)
-            return dist;
-        foreach (int[] dir in directions)
-        {
-            int nr = r + dir[0], nc = c + dir[1];
-            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols &&
-                grid[nr][nc] != '#' && !visited.Contains((nr, nc)))
-            {
-                visited.Add((nr, nc));
-                queue.Enqueue((nr, nc, dist + 1));
-            }
-        }
-    }
-    return -1;
-}
-```
-
-**Multi-source BFS — start from multiple sources simultaneously**
+**Scenario 3 — multi-source BFS (distance to nearest gate)**
 ```csharp
 public void WallsAndGates(int[][] rooms)
 {
-    // Fill each empty room with distance to nearest gate (0).
-    // Gates are 0, walls are -1, empty rooms are INF.
-    int INF = int.MaxValue;
-    int rows = rooms.Length, cols = rooms[0].Length;
-    var queue = new Queue<(int, int)>();
-    for (int r = 0; r < rows; r++)
-    {
-        for (int c = 0; c < cols; c++)
-        {
-            if (rooms[r][c] == 0)
-                queue.Enqueue((r, c));  // seed all gates at once
-        }
-    }
+    int rows = rooms.Length, cols = rooms[0].Length, INF = int.MaxValue;
+    var queue = new Queue<(int R, int C)>();
 
-    int[][] directions = new int[][] { new[] { -1, 0 }, new[] { 1, 0 }, new[] { 0, -1 }, new[] { 0, 1 } };
+    // Seed ALL gates simultaneously at distance 0
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            if (rooms[r][c] == 0) queue.Enqueue((r, c));
+
+    int[][] dirs = { new[]{-1,0}, new[]{1,0}, new[]{0,-1}, new[]{0,1} };
     while (queue.Count > 0)
     {
         var (r, c) = queue.Dequeue();
-        foreach (int[] dir in directions)
+        foreach (var d in dirs)
         {
-            int nr = r + dir[0], nc = c + dir[1];
+            int nr = r + d[0], nc = c + d[1];
             if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && rooms[nr][nc] == INF)
             {
                 rooms[nr][nc] = rooms[r][c] + 1;
@@ -140,65 +132,125 @@ public void WallsAndGates(int[][] rooms)
 }
 ```
 
-**Word ladder — BFS on an implicit graph**
+**Scenario 4 — what NOT to do: marking visited on dequeue**
 ```csharp
-public int WordLadder(string begin, string end, HashSet<string> wordList)
+// BAD: marking on dequeue allows duplicate enqueuing — O(E) wasted work, potential loops
+public void BfsBad(Dictionary<int, List<int>> graph, int start)
 {
-    if (!wordList.Contains(end))
-        return 0;
-    var queue = new Queue<(string word, int steps)>();
-    queue.Enqueue((begin, 1));
-    var visited = new HashSet<string> { begin };
+    var visited = new HashSet<int>();
+    var queue   = new Queue<int>();
+    queue.Enqueue(start);
     while (queue.Count > 0)
     {
-        var (word, steps) = queue.Dequeue();
-        for (int i = 0; i < word.Length; i++)
-        {
-            for (char c = 'a'; c <= 'z'; c++)
-            {
-                var candidate = word.Substring(0, i) + c + word.Substring(i + 1);
-                if (candidate == end)
-                    return steps + 1;
-                if (wordList.Contains(candidate) && !visited.Contains(candidate))
-                {
-                    visited.Add(candidate);
-                    queue.Enqueue((candidate, steps + 1));
-                }
-            }
-        }
+        int node = queue.Dequeue();
+        if (visited.Contains(node)) continue; // check AFTER dequeue — too late
+        visited.Add(node);
+        foreach (int nb in graph[node]) queue.Enqueue(nb); // enqueues duplicates
     }
-    return 0;
+}
+
+// GOOD: mark on enqueue — each node enters the queue exactly once
+public void BfsGood(Dictionary<int, List<int>> graph, int start)
+{
+    var visited = new HashSet<int> { start }; // mark on enqueue
+    var queue   = new Queue<int>();
+    queue.Enqueue(start);
+    while (queue.Count > 0)
+    {
+        int node = queue.Dequeue();
+        foreach (int nb in graph[node])
+            if (visited.Add(nb))   // Add returns false if already visited
+                queue.Enqueue(nb); // only enqueue unvisited
+    }
 }
 ```
 
 ---
 
+## Real World Example
+
+The `FriendSuggestionService` in a social platform suggests "people you may know" — users within 2 degrees of separation. BFS from a user's node up to depth 2 collects all candidates. Multi-source BFS from all of the user's friends simultaneously avoids redundant re-traversal.
+
+```csharp
+public class FriendSuggestionService
+{
+    private readonly Dictionary<int, HashSet<int>> _friendGraph;
+
+    public FriendSuggestionService(Dictionary<int, HashSet<int>> friendGraph)
+        => _friendGraph = friendGraph;
+
+    // Returns users within maxDegrees hops, excluding direct friends and self.
+    public List<(int UserId, int Degree)> GetSuggestions(int userId, int maxDegrees = 2)
+    {
+        var visited  = new HashSet<int> { userId };
+        var queue    = new Queue<(int UserId, int Degree)>();
+        var result   = new List<(int, int)>();
+
+        queue.Enqueue((userId, 0));
+        visited.Add(userId);
+
+        while (queue.Count > 0)
+        {
+            var (current, degree) = queue.Dequeue();
+            if (degree >= maxDegrees) continue; // don't expand beyond max depth
+
+            if (!_friendGraph.TryGetValue(current, out var friends)) continue;
+            foreach (int friend in friends)
+            {
+                if (!visited.Add(friend)) continue; // already seen
+                int friendDegree = degree + 1;
+                // Direct friends (degree 1) are not suggestions — they're already connected
+                if (friendDegree > 1) result.Add((friend, friendDegree));
+                queue.Enqueue((friend, friendDegree));
+            }
+        }
+        return result.OrderBy(r => r.Degree).ToList();
+    }
+}
+```
+
+*The key insight: BFS guarantees that each user is first discovered via the shortest path. When we first reach a user at degree d, that's the minimum degree of separation — we never need to re-process them at a higher degree.*
+
+---
+
+## Common Misconceptions
+
+**"BFS and DFS produce the same result"**
+They visit the same nodes but in completely different orders. BFS visits all nodes at depth d before any at depth d+1 — it finds the shortest path. DFS explores one branch as deep as possible before backtracking — it doesn't guarantee shortest paths. Use BFS for shortest path, DFS for complete exploration.
+
+**"Multi-source BFS is just running BFS once from each source"**
+No — that would be O(k × (V + E)) for k sources. Multi-source BFS seeds all sources into the queue at distance 0 simultaneously and runs one BFS pass — O(V + E) total. Each cell is correctly assigned the minimum distance to any source.
+
+**"Level-size snapshot is optional"**
+Without snapshotting `queue.Count` before the inner loop, children appended during the loop count toward the current level — mixing distances. The snapshot is mandatory for correct level-order traversal.
+
+---
+
 ## Gotchas
 
-- **Use `collections.deque`, never `list.pop(0)`.** `list.pop(0)` is O(n) — every element shifts. At scale this turns an O(V + E) BFS into O(V² + E). Always use `deque.popleft()`.
-- **Mark visited on enqueue, not dequeue.** Marking on dequeue allows the same node to be enqueued multiple times. For a densely connected graph this multiplies work; for a graph with cycles it causes infinite looping.
-- **BFS finds shortest path only on unweighted graphs.** Every edge is treated as cost 1. Add weights and BFS gives wrong answers. Use Dijkstra for weighted graphs.
-- **Multi-source BFS seeds all sources into the queue at step 0.** This correctly computes distance to the nearest source in one pass. Running separate BFS from each source is O(k × (V + E)) — far slower and unnecessary.
-- **Level size must be snapshotted before the inner loop.** If you use `while queue` without capturing `len(queue)` first, appending children mid-loop causes the inner loop to bleed into the next level, mixing distances.
+- **Mark visited on enqueue, not dequeue.** Without this, the same node can be enqueued O(degree) times — turning O(V + E) BFS into O(V + E²) in the worst case.
+- **Never use `List<T>` as the queue.** `list.RemoveAt(0)` is O(n). Use `Queue<T>`.
+- **Snapshot `queue.Count` at the start of each level.** Required for level-order traversal.
+- **Multi-source BFS seeds all sources at distance 0.** Not "run BFS from each source separately."
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you reach for BFS when the problem asks for "minimum steps," "shortest path," or "nearest X" — and whether you implement it correctly (deque, mark on enqueue, level-size snapshot).
+**What they're really testing:** Whether you reach for BFS for "minimum steps"/"nearest X" and implement it correctly — mark on enqueue, use Queue not List.
 
-**Common question form:** Shortest path in a grid, word ladder, rotting oranges, walls and gates, binary tree level order traversal, minimum depth of binary tree.
+**Common question forms:** Shortest path in a grid. Word ladder. Rotting oranges. Binary tree level-order traversal. Minimum depth of binary tree.
 
-**The depth signal:** A junior uses BFS and gets the right answer on simple cases but marks visited on dequeue, causing TLE on dense graphs. A senior marks on enqueue, knows multi-source BFS as a first-class pattern (not "run BFS from each source"), and can explain *why* BFS guarantees shortest path — nodes are processed in non-decreasing distance order, so the first time you reach a destination is always optimal.
+**The depth signal:** A junior does BFS and marks on dequeue. A senior marks on enqueue, knows multi-source BFS as a first-class pattern, and explains why BFS guarantees shortest path — nodes are processed in non-decreasing distance order, so first-reach is always optimal.
 
 ---
 
 ## Related Topics
 
-- [[algorithms/depth-first-search.md]] — The alternative traversal; DFS for full exploration, BFS for shortest path.
-- [[algorithms/dijkstra.md]] — BFS generalized to weighted edges using a priority queue instead of a plain queue.
-- [[algorithms/queue.md]] — The data structure BFS is built on; deque correctness is critical.
-- [[algorithms/graph.md]] — Graph representations and the full BFS/DFS decision framework.
+- [[algorithms/searching/depth-first-search.md]] — DFS for full exploration; BFS for shortest path.
+- [[algorithms/searching/dijkstra.md]] — BFS generalised to weighted edges.
+- [[algorithms/datastructures/queue.md]] — BFS is built on Queue semantics.
+- [[algorithms/datastructures/graph.md]] — Graph representations BFS operates on.
 
 ---
 
@@ -208,4 +260,4 @@ https://en.wikipedia.org/wiki/Breadth-first_search
 
 ---
 
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-21*

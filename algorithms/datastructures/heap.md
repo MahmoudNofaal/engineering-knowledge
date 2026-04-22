@@ -1,6 +1,6 @@
 # Heap
 
-> A complete binary tree satisfying the heap property: every parent is smaller (min-heap) or larger (max-heap) than its children.
+> A complete binary tree stored as an array, where every parent is smaller (min-heap) or larger (max-heap) than its children — providing O(log n) insert/delete and O(1) min/max access.
 
 ---
 
@@ -8,10 +8,10 @@
 
 | | |
 |---|---|
-| **What it is** | Array-backed priority queue via heap property |
-| **Use when** | Repeated min/max from a changing dataset |
-| **Avoid when** | Arbitrary lookup, sorted iteration, or range queries |
-| **C# version** | C# 10 / .NET 6 (`PriorityQueue<T, TPriority>`) |
+| **What it is** | Array-backed complete binary tree with heap ordering property |
+| **Use when** | Top-K elements, Dijkstra/A*, task scheduling by priority, streaming median |
+| **Avoid when** | Need arbitrary element access; need sorted iteration (use sorted list) |
+| **C# version** | `PriorityQueue<T,P>` since .NET 6 (C# 10); manual before that |
 | **Namespace** | `System.Collections.Generic` |
 | **Key types** | `PriorityQueue<TElement, TPriority>` |
 
@@ -19,249 +19,226 @@
 
 ## When To Use It
 
-Use a heap when you repeatedly need the minimum or maximum element from a changing dataset. Classic use cases: priority queues, Dijkstra's algorithm, top-k problems, task scheduling, median maintenance. The defining property is O(log n) insert and O(log n) remove-min/max — better than O(n) linear scan, and unlike a sorted array you don't pay O(n) to insert.
-
-Avoid it when you need arbitrary lookup (a heap only gives you fast access to the root), sorted iteration (use a `SortedSet<T>` or sort at the end), or range queries (use a segment tree or BST). Also avoid `PriorityQueue<T, TPriority>` when you need to update a priority — .NET's implementation has no `DecreaseKey` operation. The workaround is lazy deletion: enqueue a new entry with the updated priority and ignore stale entries when they surface.
+Use a heap when you repeatedly need the minimum or maximum element from a dynamic collection — adding items and extracting the min/max over time. Classic use cases: Dijkstra's algorithm (always settle the nearest node), merge k sorted lists (always take the smallest head), top-K most frequent elements, and streaming median (two heaps). Don't use a heap for sorted iteration — extracting all n elements is O(n log n), the same as sorting. Use `SortedSet<T>` if you need both sorted order and O(log n) operations.
 
 ---
 
 ## Core Concept
 
-A heap is stored as an array, not a linked structure. For a node at index `i`: left child at `2i + 1`, right child at `2i + 2`, parent at `(i - 1) / 2`. This arithmetic means you never need pointers — the tree is implicit in the array layout.
+A heap is stored as a flat array. For element at index i: left child at `2i+1`, right child at `2i+2`, parent at `(i-1)/2`. This compact representation avoids pointer overhead and is cache-friendly. The **heap property**: every node is ≤ (min-heap) or ≥ (max-heap) its children. This ensures the root is always the minimum or maximum.
 
-The heap property is maintained by two operations:
-
-**Sift-up (after insert):** Place the new element at the end of the array, then repeatedly swap it with its parent while it violates the heap property. At most O(log n) swaps.
-
-**Sift-down (after extract-min):** Swap the root with the last element, reduce size by one, then push the new root down by swapping with its smaller child until the property holds. Also O(log n).
-
-Building a heap from n unsorted elements via the "heapify" algorithm is O(n) — not O(n log n). The proof is non-obvious: most nodes are near the bottom and barely need to sift down. This is why initialising a `PriorityQueue` from an existing collection is significantly faster than inserting elements one by one.
+**Insert (push):** append to the end of the array, then sift up — repeatedly swap with parent until the heap property is restored. O(log n).
+**Extract-min (pop):** swap root with last element, remove last, sift the new root down — swap with the smaller child until the property is restored. O(log n).
+**Build heap from n elements:** start from the last non-leaf (`n/2 - 1`) and sift down each. O(n) total (not O(n log n)) — the geometric series argument.
 
 ---
 
-## Version History
+## Algorithm History
 
-| C# Version | .NET Version | What changed |
-|---|---|---|
-| C# 1.0 | .NET 1.0 | No BCL heap — developers used sorted collections or third-party libs |
-| C# 2.0 | .NET 2.0 | `SortedDictionary<K,V>` available — used as a makeshift priority queue |
-| C# 6.0 | .NET 4.6 | Still no native heap; NuGet `System.Collections.Specialized` filled the gap |
-| C# 10.0 | .NET 6 | `PriorityQueue<TElement, TPriority>` added to BCL — min-heap semantics |
-| C# 12.0 | .NET 8 | `PriorityQueue` gains `EnqueueDequeue` and `EnqueueRange` for batch operations |
+| Year | Development |
+|---|---|
+| 1964 | J.W.J. Williams invents heapsort and defines the heap data structure |
+| 1964 | Robert Floyd introduces O(n) heapify (build-heap) |
+| 1984 | Fibonacci heap introduced by Fredman and Tarjan — O(1) amortised insert |
+| 2021 | .NET 6 ships `PriorityQueue<TElement, TPriority>` — first standard heap in C# |
 
-*Before .NET 6, C# developers either used `SortedSet<T>` (which doesn't allow duplicates), rolled their own heap, or brought in a NuGet package. The absence of a built-in priority queue was a long-standing gap.*
+*Before .NET 6, C# had no built-in priority queue. Production code used NuGet packages or manual implementations.*
 
 ---
 
 ## Performance
 
-| Operation | Complexity | Notes |
+| Operation | Time | Notes |
 |---|---|---|
-| Enqueue | O(log n) | Sift-up — at most log n swaps |
-| Dequeue (min) | O(log n) | Sift-down — at most log n swaps |
-| Peek (min) | O(1) | Root is always at index 0 |
-| Build from collection | O(n) | Heapify — not O(n log n) |
-| Arbitrary element access | O(n) | No index structure — must scan |
-| Remove arbitrary element | O(n) | Find it (O(n)) then sift (O(log n)) |
+| Peek (min/max) | O(1) | Root is always min/max |
+| Enqueue (insert) | O(log n) | Sift up |
+| Dequeue (extract min) | O(log n) | Sift down |
+| Build heap from array | O(n) | Bottom-up heapify |
+| Heapsort | O(n log n) | n × O(log n) extractions |
+| Decrease-key | O(log n) | Not supported in PriorityQueue — push duplicate |
 
-**Allocation behaviour:** The internal array is a single heap-allocated `(TElement, TPriority)[]`. Resizing doubles the array — same strategy as `List<T>`. For small heaps the entire array typically stays in CPU cache, making constant factors small in practice.
+**Allocation behaviour:** Single array of capacity n. No per-element allocation. `PriorityQueue<T,P>` stores `(element, priority)` pairs as value tuples in the internal array — zero heap allocation per enqueue.
 
-**Benchmark notes:** For the top-k problem, a size-k min-heap over n elements runs in O(n log k) — strictly better than O(n log n) sort when k ≪ n. At k = 1,000 and n = 1,000,000, that's roughly 10× fewer comparisons than sorting.
+**Benchmark notes:** A binary heap is typically 2–3× faster than a sorted set (`SortedSet<T>`) for priority queue workloads because of better cache behaviour (array vs tree nodes). Fibonacci heap has better theoretical complexity but is rarely faster in practice due to high constant factors.
 
 ---
 
 ## The Code
 
-**Basic min-heap operations**
+**Scenario 1 — top-K smallest elements**
 ```csharp
-var heap = new PriorityQueue<string, int>();
-heap.Enqueue("low",    10);
-heap.Enqueue("urgent", 1);
-heap.Enqueue("medium", 5);
-
-string top = heap.Peek();             // "urgent" — O(1), doesn't remove
-string val = heap.Dequeue();          // "urgent" — O(log n)
-Console.WriteLine(heap.Count);        // 2
-```
-
-**Max-heap — negate the priority**
-```csharp
-// PriorityQueue is min-heap only; negate to simulate max-heap
-var maxHeap = new PriorityQueue<int, int>();
-int[] nums = { 3, 1, 9, 2, 7 };
-foreach (int n in nums)
-    maxHeap.Enqueue(n, -n);           // store with negated priority
-
-int largest = maxHeap.Dequeue();      // 9
-```
-
-**Top-k largest elements — O(n log k)**
-```csharp
-public static List<int> TopKLargest(int[] nums, int k)
+// Use a MAX-heap of size K. If new element < heap max, replace max.
+// Result: the K smallest elements remain in the heap.
+public int[] TopKSmallest(int[] nums, int k)
 {
-    // Keep a size-k MIN-heap. If a new element exceeds the heap's min, swap it in.
-    var heap = new PriorityQueue<int, int>();
-
-    foreach (int n in nums)
+    // PriorityQueue is a min-heap. Negate priority for max-heap behaviour.
+    var maxHeap = new PriorityQueue<int, int>(k + 1);
+    foreach (int num in nums)
     {
-        heap.Enqueue(n, n);
-        if (heap.Count > k)
-            heap.Dequeue();           // evict the smallest so far
+        maxHeap.Enqueue(num, -num); // negative priority = max-heap
+        if (maxHeap.Count > k)
+            maxHeap.Dequeue();      // remove the largest in the heap
     }
-
-    var result = new List<int>();
-    while (heap.Count > 0)
-        result.Add(heap.Dequeue());
-    result.Reverse();
-    return result;
+    return maxHeap.UnorderedItems.Select(x => x.Element).ToArray();
 }
-// TopKLargest([3,1,9,2,7,4,8], 3) → [7, 8, 9]
 ```
 
-**Merge k sorted arrays — O(n log k)**
+**Scenario 2 — merge K sorted lists**
 ```csharp
-public static List<int> MergeKSorted(List<int[]> arrays)
+public ListNode? MergeKLists(ListNode?[] lists)
 {
-    var result = new List<int>();
-    // heap stores (value, arrayIndex, elementIndex)
-    var heap = new PriorityQueue<(int val, int i, int j), int>();
+    // Seed the heap with the head of each list
+    var pq = new PriorityQueue<ListNode, int>();
+    foreach (var head in lists)
+        if (head != null) pq.Enqueue(head, head.Val);
 
-    for (int i = 0; i < arrays.Count; i++)
-        if (arrays[i].Length > 0)
-            heap.Enqueue((arrays[i][0], i, 0), arrays[i][0]);
-
-    while (heap.Count > 0)
+    var dummy = new ListNode(0);
+    var curr  = dummy;
+    while (pq.Count > 0)
     {
-        var (val, i, j) = heap.Dequeue();
-        result.Add(val);
-        if (j + 1 < arrays[i].Length)
+        var node = pq.Dequeue();    // O(log k)
+        curr.Next = node;
+        curr = curr.Next;
+        if (node.Next != null)
+            pq.Enqueue(node.Next, node.Next.Val);
+    }
+    return dummy.Next;
+}
+// Time: O(n log k) — n total nodes, log k per heap operation
+```
+
+**Scenario 3 — streaming median (two heaps)**
+```csharp
+public class MedianFinder
+{
+    // maxHeap: lower half — peek gives the largest of the lower half
+    private readonly PriorityQueue<int, int> _maxHeap = new();
+    // minHeap: upper half — peek gives the smallest of the upper half
+    private readonly PriorityQueue<int, int> _minHeap = new();
+
+    public void AddNum(int num)
+    {
+        _maxHeap.Enqueue(num, -num); // negate for max-heap
+        // Balance: max of lower half must not exceed min of upper half
+        int maxLower = -_maxHeap.UnorderedItems.First().Priority;
+        int? minUpper = _minHeap.Count > 0 ? _minHeap.Peek() : (int?)null;
+
+        if (minUpper.HasValue && maxLower > minUpper.Value)
         {
-            int next = arrays[i][j + 1];
-            heap.Enqueue((next, i, j + 1), next);
+            _minHeap.Enqueue(_maxHeap.Dequeue(), _maxHeap.Count > 0 ? 0 : int.MaxValue);
+            // Simplified: move max of lower to upper
         }
+        // Keep sizes balanced (maxHeap can have at most 1 extra)
+        if (_maxHeap.Count > _minHeap.Count + 1)
+            _minHeap.Enqueue(_maxHeap.Dequeue(), _minHeap.Count);
+        else if (_minHeap.Count > _maxHeap.Count)
+            _maxHeap.Enqueue(_minHeap.Dequeue(), -_minHeap.Count);
     }
-    return result;
+
+    public double FindMedian() => _maxHeap.Count == _minHeap.Count
+        ? (_maxHeap.UnorderedItems.First().Element + _minHeap.Peek()) / 2.0
+        : _maxHeap.UnorderedItems.First().Element;
 }
 ```
 
-**What NOT to do — and the fix**
+**Scenario 4 — what NOT to do: sorting for repeated min extractions**
 ```csharp
-// BAD: sorting to find the top-k — O(n log n), ignores that k ≪ n
-public static List<int> TopKBad(int[] nums, int k)
+// BAD: O(n log n) upfront + O(n) per extraction = O(n²) for k extractions
+public int[] ExtractKMinBad(int[] nums, int k)
 {
-    return nums.OrderByDescending(x => x).Take(k).ToList();
+    Array.Sort(nums);                  // O(n log n) — sorts everything even if k << n
+    return nums[..k];
 }
 
-// GOOD: size-k heap — O(n log k), far faster when k is small
-public static List<int> TopKGood(int[] nums, int k)
-    => TopKLargest(nums, k);   // see above — O(n log k)
+// GOOD: O(n) build heap + O(k log n) for k extractions = O(n + k log n)
+public int[] ExtractKMinGood(int[] nums, int k)
+{
+    var pq = new PriorityQueue<int, int>();
+    foreach (int n in nums) pq.Enqueue(n, n); // O(n log n) — or use O(n) heapify
+    var result = new int[k];
+    for (int i = 0; i < k; i++) result[i] = pq.Dequeue(); // O(k log n)
+    return result;
+    // For k << n, O(n + k log n) << O(n log n)
+}
 ```
 
 ---
 
 ## Real World Example
 
-A distributed task scheduler assigns jobs to workers. Jobs arrive continuously with varying priorities (SLA tier: critical, high, standard). Workers poll for the next job. The scheduler must always hand out the highest-priority job available, even as new high-priority jobs arrive mid-queue. A `PriorityQueue` handles this naturally — enqueue on arrival, dequeue gives the highest-priority item regardless of insertion order.
+The `AlertPriorityService` in a monitoring platform processes incoming alerts and always handles the most critical one first. Alerts arrive continuously; the service dequeues by severity. Without a heap, finding the highest-severity unhandled alert would require scanning all pending alerts each time — O(n) per extraction. With a max-heap (min-heap with negated severity), extraction is O(log n).
 
 ```csharp
-public enum JobPriority { Critical = 0, High = 1, Standard = 2 }
-
-public record Job(string Id, string Description, JobPriority Priority, DateTime CreatedAt);
-
-public class TaskScheduler
+public class AlertPriorityService
 {
-    // Min-heap on (priority level, createdAt) — lower number = higher urgency
-    private readonly PriorityQueue<Job, (int priority, DateTime created)> _queue = new();
-    private readonly object _lock = new();
+    public record Alert(Guid Id, string Message, int Severity, DateTimeOffset ReceivedAt);
 
-    public void Enqueue(Job job)
+    // Max-heap by severity (negate for PriorityQueue min-heap semantics)
+    private readonly PriorityQueue<Alert, int> _queue = new();
+    private readonly HashSet<Guid> _cancelled = new();
+
+    public void Enqueue(Alert alert)
+        => _queue.Enqueue(alert, -alert.Severity); // O(log n)
+
+    public void Cancel(Guid alertId)
+        => _cancelled.Add(alertId); // lazy deletion — O(1)
+
+    // Returns the highest-severity active alert
+    public Alert? DequeueNext()
     {
-        lock (_lock)
+        while (_queue.Count > 0)
         {
-            // Primary: priority level. Secondary: FIFO within same priority.
-            _queue.Enqueue(job, ((int)job.Priority, job.CreatedAt));
+            var alert = _queue.Dequeue(); // O(log n)
+            if (!_cancelled.Remove(alert.Id)) // Remove returns true if found
+                return alert;
+            // Was cancelled — discard and try next
         }
+        return null;
     }
-
-    public bool TryDequeue(out Job? job)
-    {
-        lock (_lock)
-        {
-            if (_queue.Count == 0) { job = null; return false; }
-            job = _queue.Dequeue();
-            return true;
-        }
-    }
-
-    public Job? Peek()
-    {
-        lock (_lock)
-        {
-            return _queue.TryPeek(out var job, out _) ? job : null;
-        }
-    }
-
-    public int Pending => _queue.Count;
 }
 ```
 
-*The key insight is the composite priority key `(int priority, DateTime created)`: tuples compare lexicographically in C#, so jobs sort by priority level first, and within the same priority they sort by creation time — giving FIFO behaviour within each tier at no extra cost.*
+*The key insight: lazy deletion (mark as cancelled in a HashSet, skip on dequeue) avoids the O(n) cost of finding and removing an element from the middle of the heap. This is the standard workaround for the missing decrease-key/remove operation in `PriorityQueue`.*
 
 ---
 
 ## Common Misconceptions
 
-**"`PriorityQueue` in C# is a max-heap"**
-It's a min-heap. The element with the *lowest* priority value is dequeued first. To get max-heap behaviour, negate the priority value when enqueueing: `heap.Enqueue(item, -priority)`.
+**"`PriorityQueue<T,P>` dequeues the highest priority"**
+No — it dequeues the element with the **lowest** priority value (min-heap). To simulate a max-heap, negate the priority: `pq.Enqueue(item, -priorityValue)`.
+
+**"Heap sort is O(n log n) so it's as fast as merge sort"**
+Same asymptotic complexity but heap sort has worse cache performance because sift-down accesses non-contiguous memory (parent to child jumps are `i → 2i+1`). Merge sort accesses memory sequentially. In practice, heap sort is 2–3× slower than merge sort on modern hardware.
 
 **"Building a heap from n elements is O(n log n)"**
-It's O(n). The "heapify" algorithm (bottom-up construction) runs in linear time because most nodes are near the leaves and require very few sift-down comparisons. Inserting n elements one-by-one *is* O(n log n). Use `PriorityQueue<T,P>.EnqueueRange` or construct from a collection when you have all elements upfront.
-
-**"A heap is sorted — heap[1] is the second smallest"**
-A heap is partially ordered, not fully sorted. The root is guaranteed to be the minimum. Everything else is only constrained relative to its parent. `heap[1]` in the internal array is one of the root's children — the smaller of the two — but not necessarily the second-smallest element overall.
+No — O(n). Bottom-up heapify starts from the last non-leaf and sifts down. Most elements are near the leaves and require very few sift-down steps. The total work is bounded by the geometric series sum, giving O(n).
 
 ---
 
 ## Gotchas
 
-- **`PriorityQueue<T, TPriority>` has no `DecreaseKey` operation.** You can't update the priority of an element already in the queue. The standard workaround is **lazy deletion**: enqueue a new entry with the updated priority, and when you dequeue the old entry, check if it's stale and skip it. Dijkstra's implementations in C# commonly use this pattern.
-
-- **`PriorityQueue` allows duplicate priorities; dequeue order within the same priority is unspecified.** It's not FIFO within a priority level unless you include a sequence number or timestamp in the priority key (as shown in the Real World Example above).
-
-- **The two-heap median trick is a classic that gets missed.** Maintaining a running median requires two heaps — a max-heap for the lower half and a min-heap for the upper half — kept within 1 element of each other in size. The median is then the max of the lower half (or average of both tops for even count). This pattern appears in the "Find Median from Data Stream" problem.
-
-- **Heapify is O(n) but `EnqueueRange` may not use it.** Check the .NET docs for the version you're on — early .NET 6 shipped `EnqueueRange` as repeated O(log n) inserts. Later versions may optimise. When performance matters, profile rather than assume.
-
-- **`SortedSet<T>` is not a heap substitute.** It gives O(log n) insert and O(log n) min/max, but it doesn't allow duplicates and its memory overhead per node is higher. Use it when you need sorted iteration or range queries alongside min/max; use `PriorityQueue` when you only need the priority queue operations.
+- **`PriorityQueue` has no decrease-key.** To update a priority, push a new entry and use lazy deletion to skip the stale one when it's dequeued.
+- **`UnorderedItems` returns items in heap order, not sorted order.** Don't assume any order from `UnorderedItems` — it's a raw view of the internal array.
+- **For max-heap, negate the priority.** C#'s `PriorityQueue` is always a min-heap. There is no built-in max-heap.
+- **`n/2 - 1` is the last non-leaf index for 0-based arrays.** This is the starting point for O(n) build-heap.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you recognise "repeated min/max from a changing collection" as a heap problem, and whether you know the two-heap median trick and the top-k optimisation.
+**What they're really testing:** Whether you reach for a heap for top-K and streaming problems, and whether you know the O(n) build-heap fact.
 
-**Common question forms:**
-- "Kth largest element in an array"
-- "Merge k sorted lists"
-- "Find median from a data stream"
-- "Task scheduler / minimum number of CPUs"
-- "Dijkstra's shortest path"
+**Common question forms:** Top K frequent elements. Kth largest element in stream. Merge K sorted lists. Find median from data stream. Task scheduler.
 
-**The depth signal:** A junior sorts and slices for top-k — O(n log n). A senior uses a size-k min-heap for O(n log k) and explains why: you only need to track k candidates, not sort everything. The two-heap median pattern and lazy deletion for `DecreaseKey` are the signals that separate strong candidates from exceptional ones.
-
-**Follow-up questions to expect:**
-- "What if k is close to n?" (Sorting becomes competitive; the crossover depends on constants)
-- "How would you update a priority?" (Lazy deletion — mark stale, enqueue new, skip stale on dequeue)
-- "What's the difference between a heap and a BST for this problem?" (Heap: O(1) min, O(log n) insert/extract, no range queries; BST: O(log n) min with range support)
+**The depth signal:** A junior sorts everything. A senior uses a heap, knows O(n) heapify vs O(n log n) sort, and implements the two-heap streaming median. They also know the lazy deletion pattern for `PriorityQueue`.
 
 ---
 
 ## Related Topics
 
-- [[algorithms/datastructures/balanced-bst.md]] — Also O(log n) insert/delete but supports range queries that a heap cannot.
-- [[algorithms/datastructures/graph.md]] — Dijkstra's algorithm uses a min-heap as its priority queue.
-- [[algorithms/datastructures/queue.md]] — A heap implements a priority queue — same interface, ordered by priority instead of arrival.
-- [[algorithms/datastructures/segment-tree.md]] — For range min/max queries on a mutable array — complements the heap's per-element priority model.
+- [[algorithms/sorting-algorithms/heap-sort.md]] — Heapsort uses the heap's extract-max to sort in-place.
+- [[algorithms/searching/dijkstra.md]] — Dijkstra requires a min-heap (PriorityQueue) for correct O((V+E) log V) complexity.
+- [[algorithms/datastructures/tree.md]] — A heap is a specialised tree stored as an array.
 
 ---
 
@@ -271,4 +248,4 @@ https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priority
 
 ---
 
-*Last updated: 2026-04-12*
+*Last updated: 2026-04-21*

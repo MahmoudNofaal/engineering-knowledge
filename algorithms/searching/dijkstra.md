@@ -1,54 +1,84 @@
 # Dijkstra's Algorithm
+
 > A shortest-path algorithm for weighted graphs with non-negative edge weights — O((V + E) log V) with a min-heap.
 
 ---
 
+## Quick Reference
+
+| | |
+|---|---|
+| **What it is** | Greedy BFS with a min-heap; settles nearest node each step |
+| **Use when** | Weighted graph, all edge weights ≥ 0, single-source shortest path |
+| **Avoid when** | Negative edge weights (use Bellman-Ford); unweighted (use BFS) |
+| **C# version** | C# 1.0+ logic; `PriorityQueue<T,P>` since .NET 6 |
+| **Namespace** | `System.Collections.Generic` |
+| **Key types** | `PriorityQueue<int, int>`, `Dictionary<int, int>` for distances |
+
+---
+
 ## When To Use It
-Use Dijkstra when you need the shortest path in a weighted graph and all edge weights are non-negative. It's the standard solution for network routing, maps, and any problem asking for "minimum cost path." Don't use it with negative edge weights — it gives wrong answers. Use Bellman-Ford instead for negative weights, and BFS for unweighted graphs (same correctness, lower overhead).
+
+Use Dijkstra when you need the shortest path in a weighted graph and all edge weights are non-negative. It's the standard solution for network routing, maps, and any problem asking for "minimum cost path." Don't use it with negative edge weights — it gives wrong answers silently. Use Bellman-Ford for negative weights, and plain BFS for unweighted graphs.
 
 ---
 
 ## Core Concept
-Dijkstra is BFS with a priority queue instead of a plain queue. The key insight: always process the unvisited node with the smallest known distance first. When you settle a node (pop it from the heap), its distance is final — no future path through an unvisited node can be shorter because all weights are non-negative. For each settled node, relax its edges: if going through this node gives a neighbor a shorter path, update the neighbor's distance and push it to the heap.
 
-The "visited" check on pop is essential: because Python's `heapq` doesn't support efficient decrease-key, you push duplicate entries and skip stale ones when they surface.
+Dijkstra is BFS with a priority queue instead of a plain queue. The key invariant: when a node is dequeued (settled), its distance is final. This holds because all weights are non-negative — no future edge can produce a shorter path to an already-settled node.
+
+For each settled node, **relax** its edges: if the path through this node gives a neighbour a shorter distance, update the neighbour's distance and push it to the heap. Because C#'s `PriorityQueue` has no decrease-key operation, push duplicate `(node, newDist)` entries and skip stale ones when they surface with a `if (d > dist[node]) continue` guard.
+
+---
+
+## Algorithm History
+
+| Year | Development |
+|---|---|
+| 1956 | Edsger Dijkstra develops the algorithm in ~20 minutes (published 1959) |
+| 1984 | Fibonacci heap reduces Dijkstra to O(E + V log V) |
+| 1990s | Becomes standard for road network routing |
+| 2007 | Used in OpenStreetMap routing engines |
+| 2021 | .NET 6 ships `PriorityQueue<T,P>` — clean Dijkstra implementation now possible in C# |
+
+---
+
+## Performance
+
+| Heap type | Time | Space | Notes |
+|---|---|---|---|
+| Binary heap (PriorityQueue) | O((V + E) log V) | O(V + E) | Standard choice |
+| Fibonacci heap | O(E + V log V) | O(V) | Better for dense graphs; complex to implement |
+| No heap (array scan) | O(V²) | O(V) | Better when E ≈ V² (dense graph) |
+
+**Allocation behaviour:** One `PriorityQueue` holding up to O(E) entries (lazy deletion, no decrease-key). One distance dictionary of O(V) entries.
 
 ---
 
 ## The Code
 
-**Dijkstra — standard implementation with min-heap**
+**Scenario 1 — standard Dijkstra**
 ```csharp
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
-public Dictionary<int, int> Dijkstra(Dictionary<int, List<(int, int)>> graph, int start)
+public Dictionary<int, int> Dijkstra(
+    Dictionary<int, List<(int Weight, int Dest)>> graph, int start)
 {
-    // graph[u] = [(weight, v), ...] — adjacency list with weights
-    var dist = new Dictionary<int, int>();
-    foreach (var node in graph.Keys)
-        dist[node] = int.MaxValue;
+    var dist = graph.Keys.ToDictionary(k => k, _ => int.MaxValue);
     dist[start] = 0;
+    var pq = new PriorityQueue<int, int>(); // (node, distance as priority)
+    pq.Enqueue(start, 0);
 
-    var heap = new PriorityQueue<int, int>();
-    heap.Enqueue(start, 0);  // (node, distance)
-
-    while (heap.Count > 0)
+    while (pq.Count > 0)
     {
-        int node = heap.Dequeue();
-        int d = dist[node];
+        pq.TryDequeue(out int node, out int d);
+        if (d > dist[node]) continue; // stale entry — skip
 
-        if (graph.ContainsKey(node))
+        foreach (var (weight, dest) in graph[node])
         {
-            foreach (var (weight, neighbor) in graph[node])
+            int newDist = d + weight;
+            if (newDist < dist[dest])
             {
-                int newDist = d + weight;
-                if (newDist < dist[neighbor])
-                {
-                    dist[neighbor] = newDist;
-                    heap.Enqueue(neighbor, newDist);
-                }
+                dist[dest] = newDist;
+                pq.Enqueue(dest, newDist); // push new entry; old entry becomes stale
             }
         }
     }
@@ -56,113 +86,156 @@ public Dictionary<int, int> Dijkstra(Dictionary<int, List<(int, int)>> graph, in
 }
 ```
 
-**Dijkstra with path reconstruction**
+**Scenario 2 — with path reconstruction**
 ```csharp
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
-public (int, List<int>) DijkstraPath(Dictionary<int, List<(int, int)>> graph, int start, int end)
+public (int Dist, List<int> Path) DijkstraPath(
+    Dictionary<int, List<(int Weight, int Dest)>> graph, int start, int end)
 {
-    var dist = new Dictionary<int, int>();
+    var dist = graph.Keys.ToDictionary(k => k, _ => int.MaxValue);
     var prev = new Dictionary<int, int>();
-    foreach (var node in graph.Keys)
-        dist[node] = int.MaxValue;
     dist[start] = 0;
+    var pq = new PriorityQueue<int, int>();
+    pq.Enqueue(start, 0);
 
-    var heap = new PriorityQueue<int, int>();
-    heap.Enqueue(start, 0);
-
-    while (heap.Count > 0)
+    while (pq.Count > 0)
     {
-        int node = heap.Dequeue();
-        int d = dist[node];
-        if (node == end)
-            break;  // early exit once destination settled
-
-        if (graph.ContainsKey(node))
+        pq.TryDequeue(out int node, out int d);
+        if (node == end) break;
+        if (d > dist[node]) continue;
+        foreach (var (weight, dest) in graph[node])
         {
-            foreach (var (weight, neighbor) in graph[node])
-            {
-                int newDist = d + weight;
-                if (newDist < dist[neighbor])
-                {
-                    dist[neighbor] = newDist;
-                    prev[neighbor] = node;  // track predecessor
-                    heap.Enqueue(neighbor, newDist);
-                }
-            }
+            int nd = d + weight;
+            if (nd < dist[dest]) { dist[dest] = nd; prev[dest] = node; pq.Enqueue(dest, nd); }
         }
     }
-
-    // Reconstruct path
     var path = new List<int>();
-    int current = end;
-    while (prev.ContainsKey(current))
-    {
-        path.Add(current);
-        current = prev[current];
-    }
-    path.Add(start);
-    path.Reverse();
+    for (int cur = end; prev.ContainsKey(cur); cur = prev[cur]) path.Add(cur);
+    path.Add(start); path.Reverse();
     return (dist[end], path);
 }
 ```
 
-**Dijkstra on a weighted grid**
+**Scenario 3 — Dijkstra on a weighted grid**
 ```csharp
-using System;
-using System.Collections.Generic;
-
 public int DijkstraGrid(int[][] grid)
 {
     int rows = grid.Length, cols = grid[0].Length;
-    var dist = new Dictionary<(int, int), int>();
-    for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
-            dist[(r, c)] = int.MaxValue;
-    dist[(0, 0)] = grid[0][0];
+    var dist = new int[rows, cols];
+    for (int r = 0; r < rows; r++) for (int c = 0; c < cols; c++) dist[r, c] = int.MaxValue;
+    dist[0, 0] = grid[0][0];
+    var pq = new PriorityQueue<(int R, int C), int>();
+    pq.Enqueue((0, 0), grid[0][0]);
 
-    var heap = new PriorityQueue<(int, int, int), int>();  // (cost, r, c), priority
-    heap.Enqueue((grid[0][0], 0, 0), grid[0][0]);
-
-    while (heap.Count > 0)
+    int[][] dirs = { new[]{-1,0}, new[]{1,0}, new[]{0,-1}, new[]{0,1} };
+    while (pq.Count > 0)
     {
-        var (cost, r, c) = heap.Dequeue();
-        if (cost > dist[(r, c)])
-            continue;
-        if (r == rows - 1 && c == cols - 1)
-            return cost;
-
-        int[][] directions = new int[][] { new int[] { -1, 0 }, new int[] { 1, 0 },
-                                            new int[] { 0, -1 }, new int[] { 0, 1 } };
-        foreach (var dir in directions)
+        pq.TryDequeue(out var pos, out int cost);
+        if (cost > dist[pos.R, pos.C]) continue;
+        if (pos.R == rows - 1 && pos.C == cols - 1) return cost;
+        foreach (var d in dirs)
         {
-            int nr = r + dir[0], nc = c + dir[1];
+            int nr = pos.R + d[0], nc = pos.C + d[1];
             if (nr >= 0 && nr < rows && nc >= 0 && nc < cols)
             {
-                int newCost = cost + grid[nr][nc];
-                if (newCost < dist[(nr, nc)])
-                {
-                    dist[(nr, nc)] = newCost;
-                    heap.Enqueue((newCost, nr, nc), newCost);
-                }
+                int nc2 = cost + grid[nr][nc];
+                if (nc2 < dist[nr, nc]) { dist[nr, nc] = nc2; pq.Enqueue((nr, nc), nc2); }
             }
         }
     }
-    return dist[(rows - 1, cols - 1)];
+    return dist[rows - 1, cols - 1];
 }
 ```
+
+**Scenario 4 — what NOT to do: missing the stale-entry guard**
+```csharp
+// BAD: without the stale-entry guard, old entries re-process settled nodes
+// causing incorrect relaxations and potential O(E × V) behaviour
+public void DijkstraBad(Dictionary<int, List<(int, int)>> graph, int start)
+{
+    var dist = graph.Keys.ToDictionary(k => k, _ => int.MaxValue);
+    dist[start] = 0;
+    var pq = new PriorityQueue<int, int>();
+    pq.Enqueue(start, 0);
+    while (pq.Count > 0)
+    {
+        pq.TryDequeue(out int node, out int d);
+        // MISSING: if (d > dist[node]) continue;
+        foreach (var (w, dest) in graph[node])
+        {
+            int nd = d + w;
+            if (nd < dist[dest]) { dist[dest] = nd; pq.Enqueue(dest, nd); }
+        }
+    }
+}
+
+// GOOD: always include the stale-entry guard
+// if (d > dist[node]) continue; // skip outdated heap entries
+```
+
+---
+
+## Real World Example
+
+The `DeliveryRouteOptimiser` finds the minimum-cost route between a depot and delivery addresses across a road network. Roads have distances (weights). Dijkstra gives the shortest path from the depot to every address in one pass.
+
+```csharp
+public class DeliveryRouteOptimiser
+{
+    private readonly Dictionary<string, List<(int DistanceKm, string Destination)>> _roadNetwork;
+
+    public DeliveryRouteOptimiser(
+        Dictionary<string, List<(int, string)>> roadNetwork) => _roadNetwork = roadNetwork;
+
+    public Dictionary<string, int> ShortestDistancesFrom(string depot)
+    {
+        var dist = _roadNetwork.Keys.ToDictionary(k => k, _ => int.MaxValue);
+        dist[depot] = 0;
+        var pq = new PriorityQueue<string, int>();
+        pq.Enqueue(depot, 0);
+
+        while (pq.Count > 0)
+        {
+            pq.TryDequeue(out string location, out int d);
+            if (d > dist[location]) continue;
+
+            foreach (var (km, dest) in _roadNetwork.GetValueOrDefault(location, new()))
+            {
+                int newDist = d + km;
+                if (newDist < dist[dest])
+                {
+                    dist[dest] = newDist;
+                    pq.Enqueue(dest, newDist);
+                }
+            }
+        }
+        return dist;
+    }
+}
+```
+
+*The key insight: Dijkstra computes shortest distances from the depot to ALL addresses in O((V+E) log V) — one run, not one run per address. If you need distances from every address to every other, run Dijkstra once per source (O(V × (V+E) log V)) or use Floyd-Warshall (O(V³)) for small V.*
+
+---
+
+## Common Misconceptions
+
+**"Dijkstra works with negative edge weights"**
+No. The settled-node-is-final invariant breaks: a future negative edge could reduce the distance to an already-settled node. Use Bellman-Ford for negative weights. With negative cycles, no shortest path is defined.
+
+**"I need decrease-key for Dijkstra — PriorityQueue can't do it"**
+Not required. Push a new `(node, newDist)` entry whenever you find a shorter path. When the old stale entry is eventually dequeued, the `if (d > dist[node]) continue` guard discards it. The heap contains O(E) entries in the worst case (one per relaxation) instead of O(V), but this is the standard trade-off and is perfectly efficient in practice.
+
+**"Dijkstra is only for graphs — not grids"**
+Grids are implicit graphs. Each cell is a vertex; adjacent cells are edges. Dijkstra runs on grids with weighted cells identically to how it runs on explicit graphs.
 
 ---
 
 ## Gotchas
 
-- **Dijkstra fails with negative edge weights.** The settled-node-is-final guarantee breaks when a negative edge can later improve an already-settled node's distance. Use Bellman-Ford for negative weights (O(VE)) or Johnson's algorithm for all-pairs with negatives.
-- **The `if d > dist[node]: continue` guard is mandatory.** Without it, you process stale heap entries with outdated distances, potentially relaxing edges incorrectly and wasting O(E) extra work per stale entry.
-- **Python's `heapq` has no decrease-key operation.** The standard workaround is lazy deletion: push a new `(new_dist, node)` entry and skip the old one when it surfaces. This means the heap can hold O(E) entries instead of O(V), making space complexity O(E).
-- **Edge cases on disconnected graphs.** Unreachable nodes keep `dist = inf`. Always check for `inf` before using a distance result. Dijkstra doesn't tell you a path is impossible — the distance simply stays infinite.
-- **All edge weights must be non-negative — zero is fine.** Zero-weight edges are processed correctly. This comes up in problems where moving in one direction is free and another costs 1 (0-1 BFS is a deque-based alternative that's faster for binary weights).
+- **Always include the stale-entry guard** `if (d > dist[node]) continue`. Without it, old entries re-process settled nodes causing wrong results and performance regression.
+- **Dijkstra fails with negative weights — silently.** It won't throw; it just returns wrong distances. If input might have negative weights, detect them and fall back to Bellman-Ford.
+- **Unreachable nodes keep `dist = int.MaxValue`.** Always check before using a distance result: `if (dist[node] == int.MaxValue) // unreachable`.
+- **`int.MaxValue + weight` overflows silently.** Use `if (dist[node] == int.MaxValue) continue` before relaxing, or use a safe addition.
 
 ---
 
@@ -170,18 +243,18 @@ public int DijkstraGrid(int[][] grid)
 
 **What they're really testing:** Whether you can adapt BFS to weighted graphs and implement relaxation correctly — and whether you know the algorithm's limitations.
 
-**Common question form:** Network delay time, cheapest flights within k stops, path with minimum effort, minimum cost to reach destination.
+**Common question forms:** Network delay time. Cheapest flights within K stops. Path with minimum effort. Minimum cost to reach destination.
 
-**The depth signal:** A junior knows Dijkstra uses a heap and can code the basics. A senior explains *why* it's correct — the greedy invariant: settling nodes in distance order guarantees finality because no non-negative path can improve an already-minimal distance. They also know the negative-weight failure case, implement the stale-entry guard correctly, and can distinguish when to use Dijkstra vs BFS (unweighted) vs Bellman-Ford (negative weights) vs Floyd-Warshall (all-pairs).
+**The depth signal:** A junior knows Dijkstra uses a heap. A senior explains the greedy invariant (settling in distance order is final for non-negative weights), implements the stale-entry guard, and knows when to use Dijkstra vs BFS vs Bellman-Ford vs Floyd-Warshall.
 
 ---
 
 ## Related Topics
 
-- [[algorithms/breadth-first-search.md]] — Dijkstra is BFS with a priority queue; understanding BFS first is essential.
-- [[algorithms/heap.md]] — The min-heap is what makes Dijkstra O((V + E) log V) instead of O(V²).
-- [[algorithms/graph.md]] — Graph representations and the broader shortest-path algorithm landscape.
-- [[algorithms/a-star.md]] — Dijkstra extended with a heuristic to guide search toward the destination faster.
+- [[algorithms/searching/breadth-first-search.md]] — Dijkstra is BFS with a priority queue.
+- [[algorithms/searching/bellman-ford.md]] — The alternative for negative edge weights.
+- [[algorithms/datastructures/heap.md]] — PriorityQueue makes Dijkstra O((V+E) log V).
+- [[algorithms/datastructures/graph.md]] — Graph representations Dijkstra operates on.
 
 ---
 
@@ -191,4 +264,4 @@ https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
 
 ---
 
-*Last updated: 2026-03-24*
+*Last updated: 2026-04-21*

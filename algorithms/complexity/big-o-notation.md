@@ -1,5 +1,6 @@
 # Big-O Notation
-> A mathematical notation that describes the upper bound of an algorithm's growth rate as input size approaches infinity.
+
+> A mathematical notation that describes the upper bound of an algorithm's growth rate — how time or space scales as input size n approaches infinity.
 
 ---
 
@@ -7,140 +8,161 @@
 
 | | |
 |---|---|
-| **What it is** | Worst-case growth rate descriptor |
-| **Use when** | Comparing algorithm scalability |
-| **Avoid when** | Input is small and constant factors dominate |
-| **Origin** | Number theory (Bachmann–Landau notation) |
-| **Namespace** | N/A — mathematical concept |
-| **Key classes** | O(1), O(log n), O(n), O(n log n), O(n²), O(2ⁿ), O(n!) |
+| **What it is** | Upper bound on growth rate, ignoring constants |
+| **Use when** | Comparing algorithms, communicating scalability |
+| **Avoid when** | Constant factors dominate (small n) — benchmark instead |
+| **C# version** | N/A — mathematical notation, not a language feature |
+| **Namespace** | N/A |
+| **Key types** | O(1), O(log n), O(n), O(n log n), O(n²), O(2^n), O(n!) |
 
 ---
 
 ## When To Use It
 
-Use Big-O when comparing algorithms or data structures to decide which fits your constraints. It matters most when input size can grow large — sorting a list of 10 items? Doesn't matter. Sorting 10 million? It matters enormously. Don't over-optimize for Big-O when data is small and constant factors dominate in practice. A hash map lookup is O(1) but if n never exceeds 20, a linear scan in a `List<T>` is often faster due to cache locality.
-
-Also know when Big-O is *not* the right tool: comparing two O(n log n) algorithms requires benchmarking, not notation — the constant factor is invisible to Big-O.
+Use Big-O to compare algorithms at scale — when n is large enough that the growth rate dominates constant factors. It's the language of algorithm analysis: in an interview, every solution you give should be accompanied by its time and space complexity. Don't over-rely on it for small n (< 1,000) where constant factors matter more — benchmark instead.
 
 ---
 
 ## Core Concept
 
-Big-O describes the worst-case growth rate of an algorithm — not the exact runtime, just how it scales. If you double the input and the time doubles, that's O(n). If the time quadruples, that's O(n²). Constants and lower-order terms get dropped because at large scale they become irrelevant. O(2n) and O(n + 500) are both just O(n). You care about the shape of the curve, not the exact values.
+Big-O describes how the number of operations grows relative to input size n, discarding constant multipliers and lower-order terms. O(2n) and O(5n) are both O(n) — the coefficient is irrelevant at scale. O(n² + n) is O(n²) — the dominant term wins.
 
-Three companions you'll hear alongside Big-O: Omega (Ω) describes the best case (lower bound), Theta (Θ) describes the exact case when upper and lower bounds match, and Big-O (O) strictly describes the upper bound — worst case. In interview and production contexts, "Big-O" almost always means worst-case analysis, which is the one you need to defend against.
+Three notations exist: **O** (upper bound — worst case), **Ω** (lower bound — best case), **Θ** (tight bound — both). In interviews, "Big-O" almost always means worst-case upper bound.
+
+Key rules:
+- **Drop constants:** O(3n) → O(n)
+- **Drop lower-order terms:** O(n² + n) → O(n²)
+- **Loops multiply:** a loop of n inside a loop of n → O(n²)
+- **Sequential blocks add:** O(n) + O(n log n) → O(n log n)
+- **Recursion:** solve the recurrence T(n) = aT(n/b) + f(n) using the Master Theorem
 
 ---
 
-## Version History
+## Algorithm History
 
-| Notation | Origin | Notes |
-|---|---|---|
-| Big-O | 1894 (Paul Bachmann) | Introduced in number theory for prime number analysis |
-| Omega (Ω) | 1976 (Donald Knuth) | Knuth formalized asymptotic notation for CS |
-| Theta (Θ) | 1976 (Donald Knuth) | Tight bound — upper and lower match |
-| Little-o | Academic | Strict upper bound, rarely used in engineering interviews |
-
-*Big-O predates computers. It was adapted from number theory into algorithm analysis by Knuth in the 1970s and has been the dominant notation in CS ever since.*
+| Year | Development |
+|---|---|
+| 1894 | Paul Bachmann introduces O notation in number theory |
+| 1909 | Edmund Landau popularises it — hence "Landau notation" |
+| 1960s | Donald Knuth adopts and standardises it for algorithm analysis |
+| 1990s | Becomes the universal language of CS curricula and interviews |
 
 ---
 
 ## Performance
 
-| Complexity | n = 10 | n = 1,000 | n = 1,000,000 | Name |
-|---|---|---|---|---|
-| O(1) | 1 | 1 | 1 | Constant |
-| O(log n) | 3 | 10 | 20 | Logarithmic |
-| O(n) | 10 | 1,000 | 1,000,000 | Linear |
-| O(n log n) | 33 | 9,966 | ~20,000,000 | Linearithmic |
-| O(n²) | 100 | 1,000,000 | 10¹² | Quadratic |
-| O(2ⁿ) | 1,024 | 10³⁰⁰ | 10³⁰⁰⁰⁰⁰ | Exponential |
-| O(n!) | 3,628,800 | ≈ 10²⁵⁶⁷ | unsurvivable | Factorial |
+| Notation | Name | Example | n=10 | n=100 | n=1000 |
+|---|---|---|---|---|---|
+| O(1) | Constant | Array index, hash lookup | 1 | 1 | 1 |
+| O(log n) | Logarithmic | Binary search | 3 | 7 | 10 |
+| O(n) | Linear | Linear scan | 10 | 100 | 1,000 |
+| O(n log n) | Linearithmic | Merge sort | 33 | 664 | 9,966 |
+| O(n²) | Quadratic | Nested loops | 100 | 10,000 | 1,000,000 |
+| O(2^n) | Exponential | Subsets | 1,024 | 10^30 | ∞ |
+| O(n!) | Factorial | Permutations | 3.6M | 10^157 | ∞ |
 
-**Allocation behaviour:** Big-O itself describes operations, not allocations. But the same notation applies to space — an O(n) space algorithm allocates memory proportional to input size, which can cause OOM failures well before time limits are hit.
-
-**Benchmark notes:** The "crossover point" where a better-Big-O algorithm actually wins varies by algorithm. A well-tuned O(n²) sort like insertion sort outperforms O(n log n) merge sort for n < ~20 due to cache locality and no allocation overhead. Many library sort implementations (including .NET's `Array.Sort`) use insertion sort for small partitions for exactly this reason.
+**Space complexity** follows the same notation — it counts memory consumed relative to n, not time. O(1) space means the algorithm uses a fixed number of variables regardless of n. O(n) space means it allocates something proportional to n (an output array, a call stack, a hash map).
 
 ---
 
 ## The Code
 
-**O(1) — Constant: index access, hash lookup**
+**Scenario 1 — identifying complexity from code structure**
 ```csharp
-public static int GetFirst(List<int> items)
-{
-    return items[0];  // always one operation, regardless of list size
-}
+// O(1) — fixed operations regardless of input size
+public int GetFirst(int[] arr) => arr[0];
 
-public static bool ContainsKey(Dictionary<string, int> map, string key)
+// O(log n) — halves the problem each step
+public int BinarySearch(int[] arr, int target)
 {
-    return map.ContainsKey(key);  // O(1) amortized — hash computation is fixed cost
-}
-```
-
-**O(log n) — Logarithmic: binary search**
-```csharp
-public static int BinarySearch(List<int> items, int target)
-{
-    int lo = 0, hi = items.Count - 1;
+    int lo = 0, hi = arr.Length - 1;
     while (lo <= hi)
     {
-        int mid = (lo + hi) / 2;
-        if (items[mid] == target) return mid;
-        else if (items[mid] < target) lo = mid + 1;  // discard left half
-        else hi = mid - 1;                            // discard right half
+        int mid = lo + (hi - lo) / 2;
+        if (arr[mid] == target) return mid;
+        if (arr[mid] < target) lo = mid + 1; else hi = mid - 1;
     }
     return -1;
-    // Each iteration cuts the search space in half → log₂(n) iterations max
 }
-```
 
-**O(n) — Linear: single scan**
-```csharp
-public static int FindMax(List<int> items)
-{
-    int maxVal = items[0];
-    foreach (var item in items)   // touches each element exactly once
-        if (item > maxVal) maxVal = item;
-    return maxVal;
-}
-```
+// O(n) — one pass through input
+public int Sum(int[] arr) { int s = 0; foreach (int x in arr) s += x; return s; }
 
-**O(n²) — Quadratic: nested loops**
-```csharp
-// BAD: checking duplicates with nested loops
-public static bool HasDuplicateNaive(List<int> items)
+// O(n²) — nested loops both iterating to n
+public bool HasDuplicates(int[] arr)
 {
-    for (int i = 0; i < items.Count; i++)
-        for (int j = 0; j < items.Count; j++)
-            if (i != j && items[i] == items[j]) return true;
+    for (int i = 0; i < arr.Length; i++)
+        for (int j = i + 1; j < arr.Length; j++)
+            if (arr[i] == arr[j]) return true;
     return false;
 }
 
-// GOOD: hash set drops it to O(n)
-public static bool HasDuplicateFast(List<int> items)
+// O(n log n) — sort dominates
+public int[] SortAndReturn(int[] arr) { Array.Sort(arr); return arr; }
+```
+
+**Scenario 2 — space complexity examples**
+```csharp
+// O(1) space — in-place, only a few variables
+public void ReverseInPlace(int[] arr)
 {
-    var seen = new HashSet<int>();
-    foreach (var item in items)
-        if (!seen.Add(item)) return true;
-    return false;
+    int lo = 0, hi = arr.Length - 1;
+    while (lo < hi) { (arr[lo], arr[hi]) = (arr[hi], arr[lo]); lo++; hi--; }
+}
+
+// O(n) space — allocates output proportional to input
+public int[] ReverseCopy(int[] arr)
+{
+    var result = new int[arr.Length]; // O(n) allocation
+    for (int i = 0; i < arr.Length; i++)
+        result[i] = arr[arr.Length - 1 - i];
+    return result;
+}
+
+// O(log n) space — recursive binary search uses log n stack frames
+public int BinarySearchRecursive(int[] arr, int target, int lo, int hi)
+{
+    if (lo > hi) return -1;
+    int mid = lo + (hi - lo) / 2;
+    if (arr[mid] == target) return mid;
+    return arr[mid] < target
+        ? BinarySearchRecursive(arr, target, mid + 1, hi)   // O(log n) stack depth
+        : BinarySearchRecursive(arr, target, lo, mid - 1);
 }
 ```
 
-**Simplification rules in action**
+**Scenario 3 — amortised analysis (dynamic array resizing)**
 ```csharp
-public static void MultipleLoops(List<int> items)
+// List<T>.Add() is O(1) amortised, not O(1) worst case.
+// Occasional resize doubles the array — O(n) for that one operation.
+// Over n additions: total work = n + n/2 + n/4 + ... = 2n = O(n)
+// Per operation: O(n) / n = O(1) amortised.
+var list = new List<int>(); // initial capacity: 4
+for (int i = 0; i < 1000; i++)
+    list.Add(i); // O(1) amortised per Add
+
+// Compare: inserting at index 0 is O(n) worst case, O(n) amortised — always shifts all elements
+list.Insert(0, -1); // O(n) — no amortisation helps here
+```
+
+**Scenario 4 — what NOT to do: claiming O(n) for an O(n²) algorithm**
+```csharp
+// BAD: this looks like O(n) but is O(n²) — string concatenation in a loop
+public string BuildStringBad(string[] parts)
 {
-    // Loop 1 — O(n)
-    foreach (var item in items)
-        Console.WriteLine(item);
+    string result = "";
+    foreach (string part in parts)
+        result += part; // each += allocates a NEW string of growing length → O(n²) total
+    return result;
+}
 
-    // Loop 2 — O(n), runs AFTER loop 1, not nested
-    foreach (var item in items)
-        Console.WriteLine(item * 2);
-
-    // Total: O(n) + O(n) = O(2n) → simplified to O(n)
-    // Sequential loops ADD. Only nested loops MULTIPLY.
+// GOOD: O(n) — StringBuilder appends in amortised O(1)
+public string BuildStringGood(string[] parts)
+{
+    var sb = new StringBuilder();
+    foreach (string part in parts)
+        sb.Append(part); // O(1) amortised
+    return sb.ToString(); // one allocation at the end
 }
 ```
 
@@ -148,118 +170,99 @@ public static void MultipleLoops(List<int> items)
 
 ## Real World Example
 
-In a product search API, the initial implementation used a nested loop to find matching tags: for each search term, scan all product tags. At 500 products × 10 tags × 5 search terms, that's 25,000 comparisons per request. At scale with 100,000 products, it collapsed under load. The fix was pre-building a `Dictionary<string, List<Product>>` indexed by tag at startup — turning the hot path from O(n × m × k) to O(k) per search.
+During a code review on the `ProductSearchService`, a PR replaced a LINQ `.Contains()` check on a `List<int>` with a `HashSet<int>`. The original code was O(n) per lookup (list scans linearly); the fix was O(1). With 10,000 products and 500 lookups per request, the original code did up to 5,000,000 comparisons per request. The fix did 500.
 
 ```csharp
 public class ProductSearchService
 {
-    // Pre-built once at startup — O(n × m) to build, O(1) per lookup
-    private readonly Dictionary<string, List<Product>> _tagIndex;
+    private readonly List<int> _discontinuedIdsList;      // O(n) per Contains
+    private readonly HashSet<int> _discontinuedIdsSet;    // O(1) per Contains
 
-    public ProductSearchService(IEnumerable<Product> products)
+    public ProductSearchService(IEnumerable<int> discontinuedIds)
     {
-        _tagIndex = new Dictionary<string, List<Product>>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var product in products)
-        {
-            foreach (var tag in product.Tags)
-            {
-                if (!_tagIndex.TryGetValue(tag, out var list))
-                {
-                    list = new List<Product>();
-                    _tagIndex[tag] = list;
-                }
-                list.Add(product);
-            }
-        }
+        var ids = discontinuedIds.ToList();
+        _discontinuedIdsList = ids;
+        _discontinuedIdsSet  = new HashSet<int>(ids);
     }
 
-    // O(k) where k = number of search terms — independent of product count
-    public IEnumerable<Product> Search(IEnumerable<string> searchTerms)
-    {
-        var result = new HashSet<Product>();
-        foreach (var term in searchTerms)
-        {
-            if (_tagIndex.TryGetValue(term, out var matches))
-                foreach (var match in matches)
-                    result.Add(match);
-        }
-        return result;
-    }
+    // O(n) per call — scans the entire list each time
+    public bool IsDiscontinuedSlow(int productId)
+        => _discontinuedIdsList.Contains(productId);
+
+    // O(1) per call — hash lookup
+    public bool IsDiscontinuedFast(int productId)
+        => _discontinuedIdsSet.Contains(productId);
+
+    // The difference matters in a hot path:
+    // FilterCatalogue calls IsDiscontinued for every product in the catalogue.
+    // With 10,000 products and 10,000 discontinued IDs:
+    //   Slow: O(n²) = 100,000,000 comparisons
+    //   Fast: O(n)  =      10,000 hash lookups
+    public List<int> FilterCatalogue(List<int> allProductIds)
+        => allProductIds.Where(IsDiscontinuedFast).ToList();
 }
 ```
 
-*The key insight: trading one-time O(n × m) build cost for O(1) per query is almost always the right trade-off in read-heavy systems. The startup cost amortizes to nothing at scale.*
+*The key insight: Big-O analysis predicted the problem before profiling confirmed it. O(n) inside a loop of O(n) = O(n²) — the moment you see `.Contains()` on a `List` inside a loop, reach for a `HashSet`.*
 
 ---
 
 ## Common Misconceptions
 
-**"O(1) means fast and O(n²) means slow"**
-O(1) means *constant*, not fast. A SHA-256 hash is O(1) but takes microseconds. An array access is O(1) and takes nanoseconds. And O(n²) on n=10 is 100 operations — completely fine. Big-O describes scaling behaviour, not absolute performance. The constant factor is invisible to the notation.
+**"O(2n) is faster than O(n²) for all n"**
+For small n, constants dominate. O(2n) = 20 operations and O(n²) = 100 operations at n=10 — yes, O(n) wins. But at n=2, O(n²) = 4 and O(2n) = 4 — tied. At n=1, O(n²) wins. Big-O describes asymptotic behaviour. For n < ~50, always benchmark rather than relying on notation alone.
 
-**"Two loops means O(n²)"**
-Only nested loops multiply. Two sequential loops give O(n) + O(n) = O(2n) = O(n). The classic mistake is visually counting loops rather than analyzing their relationship. Ask: does the inner loop run n times *for each iteration* of the outer loop? If yes, that's multiplication. If they run one after the other, it's addition.
+**"O(log n) means log base 10"**
+In algorithm analysis, log means log base 2 (binary logarithm) unless stated otherwise. It doesn't matter for Big-O since log bases differ only by a constant factor (`log₂(n) = log₁₀(n) / log₁₀(2)`), and constants are dropped. When someone says "log n" in an algorithm context, they mean log₂.
 
-```csharp
-// This is O(n), not O(n²) — the loops are sequential, not nested
-for (int i = 0; i < n; i++) DoA(i);
-for (int i = 0; i < n; i++) DoB(i);
-```
-
-**"Big-O accounts for everything"**
-Big-O drops constants and ignores real-world effects: cache locality, branch prediction, memory allocation overhead, and SIMD instructions all affect observed performance but are invisible to asymptotic notation. This is why profilers exist — they measure the constant factors Big-O ignores.
+**"Space complexity is just the size of the output"**
+Space complexity counts all memory the algorithm uses — input (sometimes), auxiliary data structures, call stack frames, and output. A recursive algorithm with O(n) depth uses O(n) stack space even if it produces O(1) output. The stack is part of the space cost.
 
 ---
 
 ## Gotchas
 
-- **Dropping constants can mislead you in practice.** O(n) with a massive constant can be slower than O(n²) for small n. Big-O is about scale, not a guarantee of real-world speed. Always benchmark before optimizing based on notation alone.
+- **String concatenation in a loop is O(n²), not O(n).** Each `+=` on a string allocates a new string of the combined length. Over n iterations: n + (n-1) + ... + 1 = O(n²). Always use `StringBuilder` for repeated string building.
 
-- **Big-O is worst-case by default — but not always.** QuickSort is O(n²) worst-case but O(n log n) average. When someone says QuickSort is fast, they mean average-case. Know which case you're discussing and state it explicitly.
+- **`List<T>.Contains` is O(n), not O(1).** It scans linearly. `HashSet<T>.Contains` is O(1). `Dictionary<K,V>.ContainsKey` is O(1). This is one of the most common hidden O(n) operations in production C# code.
 
-- **Space complexity is just as real as time complexity.** Recursive solutions often look clean but carry O(n) call stack space. A recursive DFS on a tree with depth 10,000 can blow the stack before it hits a time limit. Always state both.
+- **LINQ `.OrderBy().First()` is O(n log n), not O(n).** It sorts the whole sequence. Use `.MinBy()` (O(n)) if you only need the minimum element.
 
-- **Two separate loops is O(n), not O(n²).** Only nested loops multiply. Sequential loops add: O(n) + O(n) = O(2n) = O(n). Train yourself to ask "are these nested or sequential?" before classifying.
+- **Recursive depth counts as space.** A recursive DFS on a tree of depth n uses O(n) stack space even if it never allocates any heap memory. Stack overflow is a space complexity problem.
 
-- **Hash map lookups are O(1) amortized, not guaranteed.** Worst-case with pathological hash collisions is O(n). In interview answers, say "amortized O(1)" — it shows you understand the implementation, not just the lookup table.
-
-- **The `.Contains()` call hiding inside your "O(n)" loop.** A single loop with a `list.Contains(x)` call inside is actually O(n²) because `Contains` is O(n) on a `List<T>`. Use a `HashSet<T>` when you need O(1) membership checks inside a loop.
+- **Amortised O(1) is not the same as worst-case O(1).** `List<T>.Add` is O(1) amortised but O(n) worst case on resize. In real-time systems where worst-case latency matters, amortised guarantees are insufficient — use a fixed-capacity array or pre-size the list.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you can reason about scalability trade-offs, not just recite a lookup table. They want to see you *derive* complexity, not recall it.
+**What they're really testing:** Whether you automatically think in complexity when you write code — not whether you can recite definitions.
 
 **Common question forms:**
-- "What's the time complexity of your solution?"
+- "What's the time and space complexity of your solution?"
 - "Can you do better than O(n²)?"
-- "Walk me through why that's O(n log n) and not O(n²)"
+- "What's the complexity of LINQ `.OrderBy().First()`?"
 
-**The depth signal:** A junior says "it's O(n) because there's one loop." A senior derives it — "it's O(n) because each element is visited exactly once, and the hash map lookups inside are O(1) amortized, so the loop doesn't compound into O(n²)." Seniors also volunteer space complexity unprompted and know *when* an O(n log n) solution is provably optimal (e.g., comparison-based sorting has a proven lower bound of Ω(n log n) due to the decision tree argument).
+**The depth signal:** A junior recites Big-O for the obvious loop. A senior analyses every sub-operation — including hidden costs like string concatenation, `.Contains()` on a list, and recursive stack depth — and proactively states both time and space complexity without being asked. They also know the difference between worst-case, best-case, and amortised complexity, and can give an example of each.
 
 **Follow-up questions to expect:**
-- "What about the space complexity?" (always asked if you only gave time)
-- "Is that average-case or worst-case?" (the trap when you say QuickSort is O(n log n))
-- "Can you prove that's the best possible?" (the senior-level follow-up on sorting)
+- "What's the difference between O, Ω, and Θ?" → O is upper bound (worst case); Ω is lower bound (best case); Θ is tight bound (both). In interviews, O = worst case unless specified.
+- "Why do we drop constants?" → At large n, the growth rate dominates. O(100n) and O(n) differ by a fixed multiplier; O(n) and O(n²) diverge without bound.
 
 ---
 
 ## Related Topics
 
-- [[algorithms/complexity/common-complexities.md]] — Each class with concrete code examples and the practical thresholds where they break.
-- [[algorithms/complexity/complexity-analysis.md]] — The process of deriving complexity from code you haven't seen before.
-- [[algorithms/complexity/space-complexity.md]] — Applying the same notation to memory usage, including call stack analysis.
-- [[algorithms/complexity/amortized-analysis.md]] — How to reason about operations whose cost varies but averages out.
-- [[algorithms/datastructures/hash-table.md]] — Why hash lookups are O(1) amortized and when they degrade to O(n).
+- [[algorithms/complexity/common-complexities.md]] — One real example per complexity class.
+- [[algorithms/complexity/complexity-analysis.md]] — How to derive Big-O step-by-step from code.
+- [[algorithms/patterns/dynamic-programming.md]] — DP problems often involve trading O(2^n) exponential recursion for O(n²) or O(n) with memoization.
 
 ---
 
 ## Source
 
-https://www.bigocheatsheet.com
+https://en.wikipedia.org/wiki/Big_O_notation
 
 ---
 
-*Last updated: 2026-04-12*
+*Last updated: 2026-04-21*

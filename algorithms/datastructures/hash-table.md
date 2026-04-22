@@ -1,6 +1,6 @@
 # Hash Table
 
-> A data structure that maps keys to values using a hash function, giving O(1) average-case lookup, insert, and delete.
+> A data structure that maps keys to values using a hash function, providing O(1) average-case insertion, deletion, and lookup — at the cost of O(n) extra space.
 
 ---
 
@@ -8,252 +8,265 @@
 
 | | |
 |---|---|
-| **What it is** | Key-value store via hash function + array |
-| **Use when** | O(1) lookup, counting, deduplication by key |
-| **Avoid when** | Sorted order, range queries, or worst-case O(1) needed |
-| **C# version** | C# 2.0 (`Dictionary<TKey, TValue>`) |
+| **What it is** | Key-value store with O(1) average lookup via hashing |
+| **Use when** | Fast lookup by key, frequency counting, deduplication |
+| **Avoid when** | Ordered iteration needed; worst-case O(1) required (use BST or sorted dict) |
+| **C# version** | `Hashtable` C# 1.0; `Dictionary<K,V>` C# 2.0; `HashSet<T>` C# 2.0 |
 | **Namespace** | `System.Collections.Generic` |
-| **Key types** | `Dictionary<TKey,TValue>`, `HashSet<T>`, `ConcurrentDictionary<TKey,TValue>` |
+| **Key types** | `Dictionary<TKey, TValue>`, `HashSet<T>`, `ConcurrentDictionary<K,V>` |
 
 ---
 
 ## When To Use It
 
-Use a hash table any time you need to look up, count, or deduplicate by a key in O(1). It's the single most common structure for trading space for time — the go-to when a nested loop is too slow. If you find yourself writing "check if this value has been seen before" or "count how many times each X appears," you want a hash table.
-
-Avoid it when you need sorted order or range queries — a `SortedDictionary<TKey, TValue>` (backed by a Red-Black tree) gives O(log n) with key ordering. Avoid it when you need guaranteed worst-case O(1) — hash tables are average-case O(1) and degrade to O(n) under adversarial input or a poor hash function. Avoid it when keys are not hashable (mutable objects in Python, unhashable types in C#).
+Use a hash table whenever you need O(1) lookup by key — frequency counting, grouping, memoization, two-sum complement checking, deduplication, and caching. It's the single most impactful data structure for converting O(n²) brute-force solutions to O(n). Don't use it when you need keys in sorted order (use `SortedDictionary<K,V>`) or when worst-case O(1) is required (adversarial hash collisions can degrade to O(n) — use a tree-based map for those cases).
 
 ---
 
 ## Core Concept
 
-A hash function takes a key and maps it to an integer index in an array of buckets. Ideally each key maps to a unique bucket, giving O(1) access. In practice, two different keys can hash to the same bucket — a **collision**. There are two standard resolution strategies:
+A hash table stores key-value pairs in an array of "buckets." To store or retrieve a key, compute `hash(key) % bucketCount` to find the bucket index. Collisions (two keys mapping to the same bucket) are resolved by either **chaining** (each bucket holds a linked list of entries) or **open addressing** (probe for the next empty slot).
 
-**Chaining:** Each bucket holds a linked list of entries. On collision, the new entry is appended to the list. Lookup scans the list. Works well at high load factors because buckets grow rather than displacing each other.
+C#'s `Dictionary<K,V>` uses open addressing with a mix of techniques. The load factor (entries / buckets) is kept below ~0.72 — when exceeded, the table is resized to roughly double capacity and all keys are rehashed. This rehash is O(n) but amortised O(1) per insertion.
 
-**Open addressing:** All entries live directly in the array. On collision, probe to the next open slot (linear, quadratic, or pseudo-random probing). Lookup follows the same probe sequence. Better cache locality than chaining but degrades faster at high load.
-
-.NET's `Dictionary<TKey, TValue>` uses **chaining with an array of linked "entry" structs** — the chains are not heap-allocated linked lists but compact struct arrays, giving better cache behaviour than classical chaining. The load factor limit is approximately 1.0; when exceeded the table resizes (doubles) and rehashes all entries — O(n) occasionally, O(1) amortised.
+The quality of `GetHashCode()` determines performance. A poor hash function that returns the same value for all keys degrades every operation to O(n) — all keys land in the same bucket, turning lookup into a linear scan.
 
 ---
 
-## Version History
+## Algorithm History
 
-| C# Version | .NET Version | What changed |
-|---|---|---|
-| C# 1.0 | .NET 1.0 | `Hashtable` — non-generic, keys and values as `object`, boxing required |
-| C# 2.0 | .NET 2.0 | `Dictionary<TKey,TValue>` and `HashSet<T>` — generic, type-safe, no boxing |
-| C# 4.0 | .NET 4.0 | `ConcurrentDictionary<TKey,TValue>` — thread-safe, lock striping |
-| C# 6.0 | .NET 4.6 | Dictionary initialiser syntax: `new Dictionary<K,V> { ["key"] = value }` |
-| C# 9.0 | .NET 5 | `Dictionary<TKey,TValue>` optimised for `string` keys via randomised hash seed |
-| C# 12.0 | .NET 8 | Collection expressions unify dictionary literals; `FrozenDictionary<K,V>` for read-only |
-
-*In .NET 5+, string hash codes are randomised per process startup to prevent hash-flooding attacks. This means string-keyed dictionaries produce different iteration orders each run — never rely on that order.*
+| Year | Development |
+|---|---|
+| 1953 | Hans Peter Luhn (IBM) proposes hashing for symbol tables |
+| 1956 | Arnold Dumey popularises the concept in "Computers and Automation" |
+| 1968 | Donald Knuth analyses hashing formally in TAOCP |
+| 1998 | C# 1.0 ships `Hashtable` (non-generic, object keys) |
+| 2005 | C# 2.0 generics: `Dictionary<K,V>` and `HashSet<T>` |
+| 2010 | .NET 4.0 adds `ConcurrentDictionary<K,V>` for thread-safe access |
+| 2012 | .NET randomises string hash seeds per-process to prevent hash-flooding DoS attacks |
 
 ---
 
 ## Performance
 
-| Operation | Complexity | Notes |
-|---|---|---|
-| Lookup by key | O(1) average | O(n) worst case on all-collision input |
-| Insert | O(1) amortised | Occasional O(n) resize-and-rehash |
-| Delete | O(1) average | Marks slot as deleted; compaction deferred |
-| Iterate | O(n) | Visits all buckets — order is unspecified |
-| Contains key | O(1) average | Same as lookup |
+| Operation | Average | Worst Case | Notes |
+|---|---|---|---|
+| Lookup `dict[key]` | O(1) | O(n) | Worst case on hash collision flood |
+| Insert | O(1) amortised | O(n) | O(n) on resize; amortised O(1) |
+| Delete | O(1) | O(n) | |
+| Contains key | O(1) | O(n) | |
+| Iteration | O(n) | O(n) | No guaranteed order |
+| Memory | O(n) | O(n) | ~1.3–2× overhead vs raw data |
 
-**Allocation behaviour:** `Dictionary<TKey, TValue>` allocates a single `Entry[]` struct array on the managed heap plus a `int[]` for bucket indices. Entries are value types (struct), so key-value pairs are stored inline — no per-entry heap allocation. Growing the table triggers one `Array.Copy`-based rehash.
+**Allocation behaviour:** `Dictionary<K,V>` allocates an internal array of `Entry` structs. Each `Entry` holds the hash code, key, value, and a next-bucket pointer. Pre-sizing with `new Dictionary<K,V>(expectedCount)` avoids rehash resizes.
 
-**Benchmark notes:** For small dictionaries (under ~20 entries), the overhead of hashing can make a simple linear scan over a `List<(K,V)>` faster due to better cache behaviour. Above that threshold, the hash table wins decisively. For extreme read-heavy workloads on a fixed dataset, `FrozenDictionary<K,V>` (.NET 8) pre-computes an optimal layout and is measurably faster on lookup at the cost of immutability.
+**Benchmark notes:** `Dictionary<K,V>` is ~3–5× slower than array index access for lookups (hash computation + bucket traversal vs direct memory address). For integer keys in a known range, an array outperforms a dictionary. The dictionary advantage is when keys are sparse or non-integer.
 
 ---
 
 ## The Code
 
-**Frequency counting — most common pattern**
+**Scenario 1 — frequency count and two-sum pattern**
 ```csharp
-var freq = new Dictionary<string, int>();
-string[] words = { "the", "cat", "sat", "on", "the", "mat", "the" };
-
-foreach (string word in words)
+// Frequency count — O(n) time, O(k) space where k = distinct values
+public Dictionary<char, int> CharFrequency(string s)
 {
-    freq[word] = freq.GetValueOrDefault(word) + 1;   // cleaner than ContainsKey
+    var freq = new Dictionary<char, int>();
+    foreach (char c in s)
+        freq[c] = freq.GetValueOrDefault(c) + 1;
+    return freq;
 }
 
-// Top entry
-var (topWord, count) = freq.MaxBy(kv => kv.Value);
-Console.WriteLine($"{topWord}: {count}");   // the: 3
-```
-
-**Two-sum — O(n) with a hash map**
-```csharp
-public static (int i, int j) TwoSum(int[] nums, int target)
+// Two-sum — O(n) using complement lookup
+public (int, int) TwoSum(int[] nums, int target)
 {
-    var seen = new Dictionary<int, int>();  // value → index
-
+    var seen = new Dictionary<int, int>(); // value → index
     for (int i = 0; i < nums.Length; i++)
     {
         int complement = target - nums[i];
         if (seen.TryGetValue(complement, out int j))
             return (j, i);
-        seen.TryAdd(nums[i], i);   // TryAdd won't overwrite if duplicate
+        seen[nums[i]] = i;
     }
     return (-1, -1);
 }
-// TwoSum([2, 7, 11, 15], 9) → (0, 1)
 ```
 
-**Grouping — group anagrams**
+**Scenario 2 — grouping and memoization**
 ```csharp
-public static List<List<string>> GroupAnagrams(string[] words)
+// Group anagrams — O(n × k log k) where k = average string length
+public List<List<string>> GroupAnagrams(string[] words)
 {
     var groups = new Dictionary<string, List<string>>();
-
     foreach (string word in words)
     {
-        char[] chars = word.ToCharArray();
-        Array.Sort(chars);
-        string key = new string(chars);   // sorted chars = canonical anagram key
-
-        if (!groups.TryGetValue(key, out var group))
-        {
-            group = new List<string>();
-            groups[key] = group;
-        }
-        group.Add(word);
+        char[] key = word.ToCharArray();
+        Array.Sort(key);                       // canonical form — O(k log k)
+        string canonical = new string(key);
+        if (!groups.ContainsKey(canonical))
+            groups[canonical] = new List<string>();
+        groups[canonical].Add(word);
     }
-    return new List<List<string>>(groups.Values);
+    return groups.Values.ToList();
 }
-// GroupAnagrams(["eat","tea","tan","ate","nat","bat"])
-// → [["eat","tea","ate"], ["tan","nat"], ["bat"]]
+
+// Memoization cache for recursive Fibonacci
+private Dictionary<int, long> _fibCache = new() { [0] = 0, [1] = 1 };
+public long Fib(int n)
+{
+    if (_fibCache.TryGetValue(n, out long cached)) return cached;
+    return _fibCache[n] = Fib(n - 1) + Fib(n - 2);
+}
 ```
 
-**What NOT to do — and the fix**
+**Scenario 3 — custom GetHashCode for composite keys**
 ```csharp
-// BAD: ContainsKey + indexer = two lookups
-if (dict.ContainsKey(key))
-    return dict[key];             // hashes key twice
+// Using ValueTuple as a composite key — tuple implements GetHashCode correctly
+var grid = new Dictionary<(int Row, int Col), char>();
+grid[(0, 0)] = 'X';
+grid[(1, 2)] = 'O';
+Console.WriteLine(grid[(0, 0)]); // 'X'
 
-// GOOD: TryGetValue = one lookup
-if (dict.TryGetValue(key, out var value))
-    return value;
+// Custom record key — record auto-generates GetHashCode from all properties
+public record Point(int X, int Y); // GetHashCode and Equals auto-generated
+var pointMap = new Dictionary<Point, string>();
+pointMap[new Point(3, 4)] = "origin";
+Console.WriteLine(pointMap[new Point(3, 4)]); // "origin" — value equality works
+```
 
-// ALSO BAD: mutating a dictionary while iterating it throws
-foreach (var kv in dict)
-    dict.Remove(kv.Key);          // InvalidOperationException
+**Scenario 4 — what NOT to do: mutable keys**
+```csharp
+// BAD: mutable object as a key — GetHashCode changes after mutation → key is "lost"
+public class MutableKey { public int Value { get; set; } }
+var dict = new Dictionary<MutableKey, string>();
+var key = new MutableKey { Value = 1 };
+dict[key] = "found";
+key.Value = 2;                   // mutate the key AFTER inserting
+Console.WriteLine(dict.ContainsKey(key)); // FALSE — hash changed, key is orphaned in wrong bucket
 
-// GOOD: collect keys first, then remove
-var keysToRemove = dict.Keys.Where(k => ShouldRemove(k)).ToList();
-foreach (var k in keysToRemove)
-    dict.Remove(k);
+// GOOD: use immutable keys — strings, int, record types, or ValueTuple
+var immutableDict = new Dictionary<(int, int), string>();
+immutableDict[(1, 2)] = "found";
+// (1, 2) is immutable — hash never changes after insertion
 ```
 
 ---
 
 ## Real World Example
 
-A real-time analytics service receives a stream of user events (page views, clicks, purchases) and needs to answer "how many unique users performed action X in the last 5 minutes?" for hundreds of action types simultaneously. The naive approach — a list of events scanned on every query — is O(events × query_count). A two-level dictionary (action → `HashSet<userId>`) reduces each query to a single `HashSet.Count` call.
+The `SessionCacheService` in a web API stores active user sessions. Each request looks up the session by token — an O(1) operation with a `Dictionary`. Under peak load (50,000 concurrent sessions, 10,000 requests/second), the previous implementation used a sorted list (O(log n) lookup, 0.013ms per lookup). The dictionary replacement is O(1) average (0.0001ms). At 10,000 req/s, that's 129ms vs 1ms of CPU time per second just on session lookups.
 
 ```csharp
-public class ActionTracker
+public class SessionCacheService
 {
-    // action → set of unique user IDs who performed it
-    private readonly Dictionary<string, HashSet<string>> _uniqueUsers = new();
-    // action → queue of (userId, timestamp) for expiry
-    private readonly Dictionary<string, Queue<(string userId, DateTime at)>> _expiry = new();
-    private readonly TimeSpan _window;
+    private readonly Dictionary<string, UserSession> _sessions = new(capacity: 60_000);
+    private readonly TimeSpan _sessionTimeout;
+    private readonly object _lock = new(); // simple lock for demo; use ConcurrentDictionary in prod
 
-    public ActionTracker(TimeSpan window) => _window = window;
+    public SessionCacheService(TimeSpan sessionTimeout)
+        => _sessionTimeout = sessionTimeout;
 
-    public void Record(string action, string userId)
+    // O(1) average — hash lookup by token string
+    public UserSession? GetSession(string token)
     {
-        if (!_uniqueUsers.ContainsKey(action))
+        lock (_lock)
         {
-            _uniqueUsers[action] = new HashSet<string>();
-            _expiry[action]      = new Queue<(string, DateTime)>();
+            if (!_sessions.TryGetValue(token, out var session)) return null;
+            if (DateTimeOffset.UtcNow - session.LastAccessed > _sessionTimeout)
+            {
+                _sessions.Remove(token); // evict expired — O(1)
+                return null;
+            }
+            session.LastAccessed = DateTimeOffset.UtcNow;
+            return session;
         }
-        _uniqueUsers[action].Add(userId);
-        _expiry[action].Enqueue((userId, DateTime.UtcNow));
     }
 
-    public int UniqueUsersFor(string action)
+    // O(1) amortised — inserts or overwrites
+    public void SetSession(string token, UserSession session)
     {
-        Expire(action);
-        return _uniqueUsers.TryGetValue(action, out var set) ? set.Count : 0;
+        lock (_lock)
+            _sessions[token] = session;
     }
 
-    private void Expire(string action)
+    // O(n) — evicts all expired sessions; run periodically, not per-request
+    public int EvictExpired()
     {
-        if (!_expiry.TryGetValue(action, out var q)) return;
-        var cutoff = DateTime.UtcNow - _window;
-        while (q.Count > 0 && q.Peek().at < cutoff)
+        lock (_lock)
         {
-            var (userId, _) = q.Dequeue();
-            // Only remove from the set if no later event for same user exists
-            if (q.All(e => e.userId != userId))
-                _uniqueUsers[action].Remove(userId);
+            var cutoff = DateTimeOffset.UtcNow - _sessionTimeout;
+            var expired = _sessions
+                .Where(kv => kv.Value.LastAccessed < cutoff)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var key in expired) _sessions.Remove(key);
+            return expired.Count;
         }
+    }
+
+    public record UserSession(int UserId, string Role, DateTimeOffset CreatedAt)
+    {
+        public DateTimeOffset LastAccessed { get; set; } = CreatedAt;
     }
 }
 ```
 
-*The key insight is that the outer `Dictionary` gives O(1) routing to the right action's data, and the inner `HashSet` gives O(1) deduplication — the combination answers "unique users per action" without ever scanning the full event stream.*
+*The key insight: pre-sizing with `capacity: 60_000` prevents any rehash resize during steady-state operation. Resizes are O(n) and cause latency spikes — in a high-traffic API, even one spike during peak load is visible in p99 latency metrics.*
 
 ---
 
 ## Common Misconceptions
 
-**"Dictionary iteration order is insertion order in C#"**
-It's not guaranteed. Unlike Python 3.7+ where dict preserves insertion order by spec, C#'s `Dictionary<TKey, TValue>` makes no ordering guarantees. Iteration order is implementation-defined and may change between .NET versions or after a resize. If you need insertion order, use a separate `List<TKey>` alongside the dictionary, or use a sorted structure.
+**"Dictionary lookup is always O(1)"**
+Average case is O(1). Worst case is O(n) when many keys hash to the same bucket (a hash collision attack). .NET mitigates this with per-process hash randomisation for strings, but integer keys or custom types with poor `GetHashCode` implementations can still degrade. For security-sensitive code with external keys, use `ConcurrentDictionary` with a randomised seed or validate inputs.
 
-**"O(1) means fast"**
-O(1) means the time doesn't grow with n — it doesn't mean the constant is small. A hash table lookup involves: compute hash, modulo to bucket index, scan the collision chain. For a `string` key, the hash involves touching every character. For small collections, a linear scan over a `List<(K,V)>` is often faster because of better cache behaviour. Profile, don't assume.
+**"Dictionary iteration order is random"**
+In .NET, `Dictionary<K,V>` preserves insertion order for iterations in practice (CPython-like since .NET Core 3.0), but this is an implementation detail, not a contract. Never rely on it. If you need ordered iteration, use `SortedDictionary<K,V>` (by key) or maintain a separate `List<K>` for insertion-order guarantees.
 
-**"HashSet<T> and Dictionary<TKey,TValue> are different data structures"**
-Internally they're the same thing. `HashSet<T>` is a `Dictionary<T, bool>` without the value — it's purely an existence check table. The API surface differs but the underlying hash table machinery is identical. Knowing this means you can reason about `HashSet<T>` performance exactly as you would `Dictionary<TKey,TValue>`.
+**"GetHashCode being equal means the keys are equal"**
+No — equal hash codes only mean the keys are in the same bucket. Two different keys can have the same hash code (collision). `Equals` is always called to confirm identity after the hash match. Equal `GetHashCode` does NOT imply equal objects; equal objects MUST have equal `GetHashCode`.
 
 ---
 
 ## Gotchas
 
-- **Custom types used as keys must implement `GetHashCode` and `Equals` consistently.** The contract: if `a.Equals(b)`, then `a.GetHashCode() == b.GetHashCode()`. Violating this causes lost entries — you insert with one hash, look up with another, and get a miss. Always override both together, never one without the other.
+- **Never mutate a key after inserting it.** The key's hash code determines its bucket. Mutating the key changes its hash, orphaning it in the wrong bucket — `ContainsKey` returns false even though the entry exists.
 
-- **Mutable keys break the invariant silently.** If you mutate a key after insertion, its hash code changes but the bucket assignment doesn't. The entry becomes unreachable — the dictionary "loses" it. Never mutate an object that's being used as a dictionary key.
+- **`dict[key]` throws `KeyNotFoundException`; `TryGetValue` doesn't.** Always use `TryGetValue` in code that handles missing keys gracefully. The `[]` indexer is only safe when you're certain the key exists.
 
-- **String hash codes are randomised per process in .NET 5+.** Two runs of the same program produce different hash values for the same strings. Don't persist or compare hash codes across process boundaries.
+- **Custom types need both `GetHashCode` and `Equals` overridden together.** If two objects are `Equals`, they must return the same `GetHashCode`. Breaking this contract silently breaks dictionary and `HashSet` behaviour.
 
-- **`ContainsKey` + `[]` indexer is two hash computations.** Always use `TryGetValue` for conditional lookup. Similarly, `GetValueOrDefault(key)` or `dict.TryAdd(key, value)` are single-lookup alternatives to the pattern of checking first then writing.
+- **`HashSet<T>` vs `List<T>.Contains`.** Both check membership. `HashSet.Contains` is O(1); `List.Contains` is O(n). Use `HashSet` for membership tests. Use `List` when order matters or duplicates are needed.
 
-- **`ConcurrentDictionary` is not always the right thread-safe choice.** It's lock-striped (good for high-concurrency reads and independent key updates), but `AddOrUpdate` and `GetOrAdd` callbacks are not atomic — they can execute multiple times under contention. For atomic compound operations, you still need external locking.
+- **`ConcurrentDictionary` is thread-safe but not atomic for multi-step operations.** `AddOrUpdate` and `GetOrAdd` are atomic per-call. A read followed by a write is not atomic — use `AddOrUpdate` for "check then insert" patterns in concurrent contexts.
 
 ---
 
 ## Interview Angle
 
-**What they're really testing:** Whether you instinctively reach for a hash map to convert a nested loop into a single pass — the space-for-time trade is one of the most fundamental optimisation moves in algorithm problems.
+**What they're really testing:** Whether you reach for a hash map to convert O(n) lookups to O(1), and whether you know the implementation details that affect correctness.
 
 **Common question forms:**
-- "Two sum" (O(n²) → O(n) with a hash map)
-- "Group anagrams" (canonical key → group mapping)
-- "Longest substring without repeating characters" (sliding window + char-to-index map)
-- "Find all duplicates in an array"
-- "Subarray sum equals k" (prefix sum + hash map)
+- "Two-sum — find two numbers that add to target."
+- "Group anagrams."
+- "Find the first non-repeating character."
+- "Longest substring without repeating characters."
+- "Design an LRU cache."
 
-**The depth signal:** A junior uses a nested loop and gets O(n²). A senior immediately asks "can I use a hash map?" and restructures to a single pass. The next level: a senior can explain what happens under the hood — hash function, collision resolution (chaining vs open addressing), load factor — and knows why you use `TryGetValue` instead of `ContainsKey + []`. The elite signal is `GetHashCode`/`Equals` contract knowledge and awareness of the randomised hash seed in .NET 5+.
+**The depth signal:** A junior uses a dictionary correctly. A senior pre-sizes it, uses `TryGetValue` over `[]`, knows the `GetHashCode`/`Equals` contract, and can explain why mutable keys break the invariant. They also know `Dictionary` preserves insertion order in .NET but that relying on it is an antipattern.
 
 **Follow-up questions to expect:**
-- "What's the worst-case complexity and when does it occur?" (O(n) — all keys collide, one bucket becomes a linear list)
-- "How would you implement a hash map from scratch?" (Array of buckets, chaining, resize at load factor threshold)
-- "What's the difference between HashMap and TreeMap in Java?" (O(1) vs O(log n), unordered vs sorted — same trade-off as `Dictionary` vs `SortedDictionary` in C#)
+- "What happens with hash collisions?" → Chaining (each bucket is a linked list) or open addressing (probe for next empty slot). C# uses open addressing internally.
+- "When would you use `SortedDictionary` over `Dictionary`?" → When you need O(log n) ordered iteration or range queries by key. `Dictionary` is O(1) unordered; `SortedDictionary` is O(log n) but maintains sorted key order.
 
 ---
 
 ## Related Topics
 
-- [[algorithms/datastructures/array.md]] — The backing data structure inside every hash table; hash tables are arrays with clever indexing.
-- [[algorithms/datastructures/balanced-bst.md]] — The ordered alternative: O(log n) but supports range queries and sorted iteration.
-- [[algorithms/datastructures/linked-list.md]] — Chaining resolution uses linked lists per bucket to handle collisions.
-- [[algorithms/patterns/sliding-window.md]] — Sliding window problems frequently pair a window with a hash map tracking window contents.
+- [[algorithms/datastructures/array.md]] — The underlying storage of a hash table's bucket array.
+- [[algorithms/patterns/sliding-window.md]] — Variable-size windows use a frequency map (Dictionary) to track window state.
+- [[algorithms/patterns/dynamic-programming.md]] — Top-down memoization uses a Dictionary as the memo table.
+- [[algorithms/datastructures/balanced-bst.md]] — The ordered alternative when sorted key iteration is needed.
 
 ---
 
@@ -263,4 +276,4 @@ https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictiona
 
 ---
 
-*Last updated: 2026-04-12*
+*Last updated: 2026-04-21*
