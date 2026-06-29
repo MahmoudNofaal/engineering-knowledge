@@ -1,0 +1,12 @@
+# Obsidian
+.obsidian/
+
+# SyncThing
+.stfolder/
+.stfolder.removed-*
+
+# Trash
+.trash/
+
+# Local project folder
+Z-SOFTWARE-PRODUCT/
